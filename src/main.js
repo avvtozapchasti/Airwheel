@@ -1,6 +1,7 @@
 import './style.css';
 import { Camera, cameraErrorText } from './vision/camera.js';
 import { HandTracker, drawHands } from './vision/hands.js';
+import { GestureController } from './control/gestures.js';
 
 const video = document.getElementById('video');
 const camCanvas = document.getElementById('cam-canvas');
@@ -10,6 +11,9 @@ const camStatus = document.getElementById('cam-status');
 const camera = new Camera(video);
 const tracker = new HandTracker();
 let hands = [];
+const gestures = new GestureController();
+const debugEl = document.getElementById('debug');
+debugEl.classList.remove('hidden');
 
 function drawPreview() {
   const w = (camCanvas.width = camCanvas.clientWidth * devicePixelRatio);
@@ -28,6 +32,14 @@ function frame(now) {
   if (camera.ready) {
     const res = tracker.detect(video, now);
     if (res) hands = res;
+    gestures.aspect = camera.width / camera.height;
+    const g = gestures.update(hands, now);
+    const f = (v) => (v == null ? '—' : v.toFixed(2));
+    debugEl.textContent =
+      `рук: ${g.handsVisible}\n` +
+      `L: ${f(g.scoreL)} ${g.fistL ? 'КУЛАК' : 'ладонь'}\n` +
+      `R: ${f(g.scoreR)} ${g.fistR ? 'КУЛАК' : 'ладонь'}\n` +
+      `газ: ${g.gas}  тормоз: ${g.brake}`;
   }
   drawPreview();
   requestAnimationFrame(frame);

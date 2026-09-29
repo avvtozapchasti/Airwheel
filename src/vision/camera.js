@@ -66,6 +66,26 @@ export class Camera {
     }
   }
 
+  // Средняя яркость кадра 0..255 (по уменьшенной копии 32×24 — это дёшево).
+  measureBrightness() {
+    if (!this.ready) return null;
+    if (!this.probe) {
+      this.probe = document.createElement('canvas');
+      this.probe.width = 32;
+      this.probe.height = 24;
+      this.probeCtx = this.probe.getContext('2d', { willReadFrequently: true });
+    }
+    try {
+      this.probeCtx.drawImage(this.video, 0, 0, 32, 24);
+      const d = this.probeCtx.getImageData(0, 0, 32, 24).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4) sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      return sum / (d.length / 4);
+    } catch {
+      return null;
+    }
+  }
+
   stop() {
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;

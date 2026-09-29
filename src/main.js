@@ -8,6 +8,7 @@ import { Track } from './game/track.js';
 import { Renderer } from './game/renderer.js';
 import { createPlayer, stepPlayer, tryNitro, STEP, KMH } from './game/physics.js';
 import { drawHud } from './game/hud.js';
+import { createBots, updateBots, checkCollisions, racePosition } from './game/bots.js';
 import { showResults } from './ui/results.js';
 
 const $ = (id) => document.getElementById(id);
@@ -31,6 +32,9 @@ const app = {
   hands: [],
   input: null,
   player: createPlayer(),
+  bots: createBots(),
+  raceTime: 0,
+  place: 1,
   lastFrame: performance.now(),
   acc: 0,
   state: 'menu', // menu | countdown | race | finished | results
@@ -42,6 +46,8 @@ const IDLE = { steer: 0, gas: false, brake: false, nitro: false };
 
 function newRace() {
   app.player = createPlayer();
+  app.bots = createBots();
+  app.raceTime = 0;
   app.acc = 0;
   app.countdown = 3;
   app.state = 'countdown';
@@ -63,7 +69,7 @@ function showMenu() {
 function finishRace() {
   app.state = 'results';
   const p = app.player;
-  showResults(screenEl, { place: 1, total: 1, time: p.totalTime, bestLap: p.bestLap, lapTimes: p.lapTimes }, { onRetry: newRace });
+  showResults(screenEl, { place: app.place, total: app.bots.length + 1, time: p.totalTime, bestLap: p.bestLap, lapTimes: p.lapTimes }, { onRetry: newRace });
 }
 
 // Один шаг симуляции.
@@ -76,8 +82,12 @@ function simulate(input, dt) {
   }
   if (app.state === 'race' || app.state === 'finished') {
     app.countdown -= dt; // «ВПЕРЁД!» ещё немного висит после старта
+    app.raceTime += dt;
     const events = stepPlayer(app.player, input, dt, track);
+    updateBots(app.bots, app.player, track, dt, app.raceTime);
+    checkCollisions(app.player, app.bots, track);
     if (events.includes('finish')) {
+      app.place = racePosition(app.player, app.bots);
       app.state = 'finished';
       app.finishTimer = 2.5;
     }
@@ -133,13 +143,13 @@ function frame(now) {
     steps++;
   }
 
-  renderer.render({ track, player: app.player, bots: [], shake: app.player.shake });
+  renderer.render({ track, player: app.player, bots: app.bots, shake: app.player.shake });
   if (app.state !== 'menu') {
     drawHud(renderer.ctx, renderer.width, renderer.height, {
       player: app.player,
       input,
-      position: 1,
-      total: 1,
+      position: app.player.finished ? app.place : racePosition(app.player, app.bots),
+      total: app.bots.length + 1,
       keyboard: app.mode === 'keyboard',
       countdown: app.countdown > -0.8 ? app.countdown : null,
     });
@@ -162,6 +172,9 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyK') setMode(app.mode === 'keyboard' ? 'gesture' : 'keyboard');
   if (e.code === 'Backquote') debugEl.classList.toggle('hidden'); // отладочная панель
 });
+
+// Доступ из консоли для отладки и проверки жюри.
+window.airwheel = app;
 
 async function boot() {
   showMenu();

@@ -2,6 +2,7 @@ import './style.css';
 import { Camera, cameraErrorText } from './vision/camera.js';
 import { HandTracker, drawHands } from './vision/hands.js';
 import { GestureController } from './control/gestures.js';
+import { Wheel } from './control/wheel.js';
 
 const video = document.getElementById('video');
 const camCanvas = document.getElementById('cam-canvas');
@@ -11,7 +12,9 @@ const camStatus = document.getElementById('cam-status');
 const camera = new Camera(video);
 const tracker = new HandTracker();
 let hands = [];
-const gestures = new GestureController();
+const wheel = new Wheel();
+const gestures = new GestureController(wheel);
+wheel.startCalibration();
 const debugEl = document.getElementById('debug');
 debugEl.classList.remove('hidden');
 
@@ -39,7 +42,11 @@ function frame(now) {
       `рук: ${g.handsVisible}\n` +
       `L: ${f(g.scoreL)} ${g.fistL ? 'КУЛАК' : 'ладонь'}\n` +
       `R: ${f(g.scoreR)} ${g.fistR ? 'КУЛАК' : 'ладонь'}\n` +
-      `газ: ${g.gas}  тормоз: ${g.brake}`;
+      `газ: ${g.gas}  тормоз: ${g.brake}\n` +
+      `калибровка: ${(g.calibProgress * 100).toFixed(0)}%\n` +
+      `угол: ${g.relDeg.toFixed(1)}°  steer: ${g.steer.toFixed(2)}\n` +
+      `нитро: ${(g.nitroHold * 100).toFixed(0)}%  старт: ${(g.startHold * 100).toFixed(0)}%\n` +
+      `ошибки: ${g.errors.map((e) => e.id).join(', ')}`;
   }
   drawPreview();
   requestAnimationFrame(frame);

@@ -7,6 +7,8 @@ import { KeyboardControl } from './control/keyboard.js';
 import { Track } from './game/track.js';
 import { Renderer } from './game/renderer.js';
 import { createPlayer, stepPlayer, tryNitro, STEP, KMH } from './game/physics.js';
+import { drawHud } from './game/hud.js';
+import { showResults } from './ui/results.js';
 
 const $ = (id) => document.getElementById(id);
 const video = $('video');
@@ -14,6 +16,7 @@ const camCanvas = $('cam-canvas');
 const camCtx = camCanvas.getContext('2d');
 const camStatus = $('cam-status');
 const debugEl = $('debug');
+const screenEl = $('screen');
 
 const camera = new Camera(video);
 const tracker = new HandTracker();
@@ -30,7 +33,63 @@ const app = {
   player: createPlayer(),
   lastFrame: performance.now(),
   acc: 0,
+  state: 'menu', // menu | countdown | race | finished | results
+  countdown: 0,
+  finishTimer: 0,
 };
+
+const IDLE = { steer: 0, gas: false, brake: false, nitro: false };
+
+function newRace() {
+  app.player = createPlayer();
+  app.acc = 0;
+  app.countdown = 3;
+  app.state = 'countdown';
+  screenEl.classList.add('hidden');
+}
+
+function showMenu() {
+  app.state = 'menu';
+  screenEl.innerHTML = `
+    <div class="card">
+      <h1>AirWheel</h1>
+      <p class="lead">Подними обе открытые ладони на 1 секунду или нажми «Старт».</p>
+      <div class="row"><button class="btn primary" id="btn-start">Старт</button></div>
+    </div>`;
+  screenEl.classList.remove('hidden');
+  $('btn-start').onclick = newRace;
+}
+
+function finishRace() {
+  app.state = 'results';
+  const p = app.player;
+  showResults(screenEl, { place: 1, total: 1, time: p.totalTime, bestLap: p.bestLap, lapTimes: p.lapTimes }, { onRetry: newRace });
+}
+
+// Один шаг симуляции.
+function simulate(input, dt) {
+  if (app.state === 'countdown') {
+    app.countdown -= dt;
+    if (app.countdown <= 0) app.state = 'race';
+    stepPlayer(app.player, IDLE, dt, track, false);
+    return;
+  }
+  if (app.state === 'race' || app.state === 'finished') {
+    app.countdown -= dt; // «ВПЕРЁД!» ещё немного висит после старта
+    const events = stepPlayer(app.player, input, dt, track);
+    if (events.includes('finish')) {
+      app.state = 'finished';
+      app.finishTimer = 2.5;
+    }
+    if (app.state === 'finished') {
+      app.finishTimer -= dt;
+      if (app.finishTimer <= 0) finishRace();
+    }
+    return;
+  }
+  // в меню и итогах машина просто стоит/докатывается
+  stepPlayer(app.player, IDLE, dt, track, false);
+}
 
 function drawPreview() {
   const w = (camCanvas.width = camCanvas.clientWidth * devicePixelRatio);
@@ -62,18 +121,29 @@ function frame(now) {
   app.lastFrame = now;
 
   const input = (app.input = readInput(now, dt));
-  if (input.nitro) tryNitro(app.player);
+  if (input.nitro && app.state === 'race') tryNitro(app.player);
+  if (app.state === 'menu' && (input.startTrigger || keyboard.has('Enter', 'Space'))) newRace();
 
   // игровой цикл с фиксированным шагом, независимо от частоты кадров
   app.acc += dt;
   let steps = 0;
   while (app.acc >= STEP && steps < 6) {
-    stepPlayer(app.player, input, STEP, track);
+    simulate(input, STEP);
     app.acc -= STEP;
     steps++;
   }
 
   renderer.render({ track, player: app.player, bots: [], shake: app.player.shake });
+  if (app.state !== 'menu') {
+    drawHud(renderer.ctx, renderer.width, renderer.height, {
+      player: app.player,
+      input,
+      position: 1,
+      total: 1,
+      keyboard: app.mode === 'keyboard',
+      countdown: app.countdown > -0.8 ? app.countdown : null,
+    });
+  }
   drawPreview();
   debugEl.textContent =
     `режим: ${app.mode}\n` +
@@ -90,10 +160,11 @@ function setMode(mode) {
 
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyK') setMode(app.mode === 'keyboard' ? 'gesture' : 'keyboard');
+  if (e.code === 'Backquote') debugEl.classList.toggle('hidden'); // отладочная панель
 });
 
 async function boot() {
-  debugEl.classList.remove('hidden');
+  showMenu();
   requestAnimationFrame(frame);
   try {
     camStatus.textContent = 'Загружаю модель рук…';

@@ -47,7 +47,8 @@ export function tryNitro(p) {
 }
 
 // Один шаг симуляции. Возвращает список событий ('lap', 'finish').
-export function stepPlayer(p, input, dt, track) {
+// running = false — таймеры гонки стоят (меню, обратный отсчёт).
+export function stepPlayer(p, input, dt, track, running = true) {
   const events = [];
   const seg = track.findSegment(p.z);
   const speedPct = p.speed / MAX_SPEED;
@@ -87,7 +88,7 @@ export function stepPlayer(p, input, dt, track) {
   p.x = Math.max(-2.2, Math.min(2.2, p.x));
 
   // движение и круги
-  if (!p.finished) {
+  if (running && !p.finished) {
     p.totalTime += dt;
     p.lapTime += dt;
   }

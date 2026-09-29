@@ -73,6 +73,8 @@ export class Onboarding {
         $('#ob-cam').disabled = true;
         $('#ob-cam-msg').textContent = 'Загружаю модель рук и включаю камеру…';
         const err = await this.h.onEnableCamera();
+        // Пока ждали камеру, экран мог смениться (например, авто-переход на клавиатуру).
+        if (this.step !== 'camera' || !$('#ob-cam-msg')) return;
         if (err) {
           $('#ob-cam-msg').textContent = err;
           $('#ob-cam').disabled = false;

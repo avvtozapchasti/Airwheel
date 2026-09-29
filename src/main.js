@@ -92,7 +92,8 @@ async function enableCamera() {
     await app.trackerReady;
     camStatus.textContent = 'Запрашиваю камеру…';
     await camera.start(1280, 720);
-    setMode('gesture');
+    // Игрок мог уйти в клавиатурный режим, пока камера включалась, — не перебиваем его выбор.
+    if (onboarding.step === 'camera') setMode('gesture');
     camStatus.textContent = `Камера ${camera.width}×${camera.height} · ${tracker.delegate}`;
     return null;
   } catch (e) {

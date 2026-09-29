@@ -72,3 +72,54 @@ html, body {
   pointer-events: none;
   white-space: pre;
 }
+
+/* ---------- экраны (меню, онбординг, пауза, итоги) ---------- */
+.screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: radial-gradient(ellipse at center, rgba(8, 12, 24, 0.55), rgba(8, 12, 24, 0.85));
+  z-index: 40;
+  overflow-y: auto;
+}
+.card {
+  width: min(640px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius);
+  padding: 24px 28px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(6px);
+}
+.card h1 { margin: 0 0 8px; font-size: clamp(24px, 4vw, 34px); }
+.card h2 { margin: 18px 0 8px; font-size: 18px; color: var(--accent); }
+.card p { margin: 6px 0; color: var(--muted); line-height: 1.45; }
+.card .lead { color: var(--text); font-size: 17px; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+.btn {
+  appearance: none;
+  border: 0;
+  border-radius: 12px;
+  padding: 14px 22px;
+  min-height: 52px;
+  font: 700 17px system-ui, sans-serif;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  transition: transform 0.08s, background 0.2s;
+}
+.btn:hover { background: rgba(255, 255, 255, 0.2); }
+.btn:active { transform: scale(0.97); }
+.btn.primary { background: var(--accent); color: #1a1400; }
+.btn.primary:hover { background: #ffd95c; }
+.btn:disabled { opacity: 0.4; cursor: default; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 14px; }
+.stats div { background: rgba(255, 255, 255, 0.06); border-radius: 12px; padding: 10px 14px; }
+.stats span { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.stats b { font-size: 20px; }

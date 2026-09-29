@@ -232,6 +232,7 @@ function simulate(input, dt) {
     updateBots(app.bots, p, track, dt, app.raceTime);
     if (checkCollisions(p, app.bots, track)) audio.crash();
     if (events.includes('lap')) audio.lap();
+    if (events.includes('crash')) audio.crash();
     if (events.includes('finish')) {
       app.place = racePosition(p, app.bots);
       app.state = 'finished';

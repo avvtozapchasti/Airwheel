@@ -17,6 +17,7 @@ const OFFROAD_DECEL = -MAX_SPEED / 1.6;
 const OFFROAD_LIMIT = MAX_SPEED / 4;
 const CENTRIFUGAL = 0.3; // снос на поворотах, пропорционален скорости и кривизне
 const STEER_RATE = 2.2;
+const SOLID = new Set(['pine', 'tree', 'post', 'sign_left', 'sign_right']);
 
 export function createPlayer() {
   return {
@@ -86,6 +87,18 @@ export function stepPlayer(p, input, dt, track, running = true) {
   if (p.speed > maxSpeed) p.speed = Math.max(maxSpeed, p.speed + DECEL * 2 * dt);
   p.speed = Math.max(0, p.speed);
   p.x = Math.max(-2.2, Math.min(2.2, p.x));
+
+  // удар о дерево, столб или знак на обочине
+  if (p.offroad && p.speed > OFFROAD_LIMIT * 0.5) {
+    for (const sp of seg.sprites) {
+      if (!SOLID.has(sp.type) || Math.abs(p.x - sp.offset) > 0.3) continue;
+      p.speed = Math.min(p.speed, MAX_SPEED * 0.15);
+      p.x -= Math.sign(p.x) * 0.15;
+      p.shake = 0.5;
+      events.push('crash');
+      break;
+    }
+  }
 
   // движение и круги
   if (running && !p.finished) {

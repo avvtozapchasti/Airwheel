@@ -1,8 +1,9 @@
 import './style.css';
 import { Camera, cameraErrorText } from './vision/camera.js';
-import { HandTracker, drawHands } from './vision/hands.js';
+import { HandTracker } from './vision/hands.js';
 import { GestureController } from './control/gestures.js';
 import { Wheel } from './control/wheel.js';
+import { Coach } from './control/coach.js';
 import { KeyboardControl } from './control/keyboard.js';
 import { Track } from './game/track.js';
 import { Renderer } from './game/renderer.js';
@@ -10,6 +11,7 @@ import { createPlayer, stepPlayer, tryNitro, STEP, KMH } from './game/physics.js
 import { drawHud } from './game/hud.js';
 import { createBots, updateBots, checkCollisions, racePosition } from './game/bots.js';
 import { showResults } from './ui/results.js';
+import { drawPreview } from './ui/preview.js';
 
 const $ = (id) => document.getElementById(id);
 const video = $('video');
@@ -18,12 +20,14 @@ const camCtx = camCanvas.getContext('2d');
 const camStatus = $('cam-status');
 const debugEl = $('debug');
 const screenEl = $('screen');
+const coachEl = $('coach');
 
 const camera = new Camera(video);
 const tracker = new HandTracker();
 const wheel = new Wheel();
 const gestures = new GestureController(wheel);
 const keyboard = new KeyboardControl();
+const coach = new Coach();
 const track = new Track();
 const renderer = new Renderer($('game'));
 
@@ -37,9 +41,12 @@ const app = {
   place: 1,
   lastFrame: performance.now(),
   acc: 0,
-  state: 'menu', // menu | countdown | race | finished | results
+  state: 'menu', // menu | countdown | race | paused | finished | results
   countdown: 0,
   finishTimer: 0,
+  hint: null,
+  lostT: 0, // сколько не видно обеих рук
+  brightnessT: 0,
 };
 
 const IDLE = { steer: 0, gas: false, brake: false, nitro: false };
@@ -51,6 +58,39 @@ function newRace() {
   app.acc = 0;
   app.countdown = 3;
   app.state = 'countdown';
+  screenEl.classList.add('hidden');
+  coach.reset();
+  if (app.mode === 'gesture') coach.startRecording();
+}
+
+// Пауза: вручную (Esc/P) или автоматически, когда пропали обе руки.
+function pause(reason) {
+  if (app.state !== 'race' && app.state !== 'countdown') return;
+  app.pausedFrom = app.state;
+  app.state = 'paused';
+  const how =
+    app.mode === 'gesture'
+      ? 'Подними обе открытые ладони к камере на 1 секунду, чтобы продолжить.'
+      : 'Нажми Enter или пробел, чтобы продолжить.';
+  screenEl.innerHTML = `
+    <div class="card">
+      <h1>⏸ Пауза</h1>
+      <p class="lead" id="pause-hint">${reason || ''}</p>
+      <p>${how}</p>
+      <div class="row">
+        <button class="btn primary" id="btn-resume">Продолжить</button>
+        <button class="btn" id="btn-restart">Заново</button>
+      </div>
+    </div>`;
+  screenEl.classList.remove('hidden');
+  $('btn-resume').onclick = resume;
+  $('btn-restart').onclick = newRace;
+}
+
+function resume() {
+  if (app.state !== 'paused') return;
+  app.state = app.pausedFrom || 'race';
+  app.lostT = 0;
   screenEl.classList.add('hidden');
 }
 
@@ -68,8 +108,21 @@ function showMenu() {
 
 function finishRace() {
   app.state = 'results';
+  coach.stopRecording();
   const p = app.player;
-  showResults(screenEl, { place: app.place, total: app.bots.length + 1, time: p.totalTime, bestLap: p.bestLap, lapTimes: p.lapTimes }, { onRetry: newRace });
+  showResults(
+    screenEl,
+    {
+      place: app.place,
+      total: app.bots.length + 1,
+      time: p.totalTime,
+      bestLap: p.bestLap,
+      lapTimes: p.lapTimes,
+      coach: coach.summary(),
+      keyboard: app.mode === 'keyboard',
+    },
+    { onRetry: newRace },
+  );
 }
 
 // Один шаг симуляции.
@@ -101,21 +154,6 @@ function simulate(input, dt) {
   stepPlayer(app.player, IDLE, dt, track, false);
 }
 
-function drawPreview() {
-  const w = (camCanvas.width = camCanvas.clientWidth * devicePixelRatio);
-  const h = (camCanvas.height = camCanvas.clientHeight * devicePixelRatio);
-  camCtx.fillStyle = '#000';
-  camCtx.fillRect(0, 0, w, h);
-  if (camera.ready) {
-    camCtx.save();
-    camCtx.translate(w, 0);
-    camCtx.scale(-1, 1); // зеркалим видео, как в зеркале
-    camCtx.drawImage(video, 0, 0, w, h);
-    camCtx.restore();
-  }
-  drawHands(camCtx, app.hands, w, h, () => '#33e07a');
-}
-
 function readInput(now, dt) {
   if (app.mode === 'keyboard') return keyboard.update(dt);
   if (camera.ready) {
@@ -132,7 +170,37 @@ function frame(now) {
 
   const input = (app.input = readInput(now, dt));
   if (input.nitro && app.state === 'race') tryNitro(app.player);
-  if (app.state === 'menu' && (input.startTrigger || keyboard.has('Enter', 'Space'))) newRace();
+  const startPressed = input.startTrigger || keyboard.has('Enter', 'Space');
+  if (app.state === 'menu' && startPressed) newRace();
+  else if (app.state === 'paused' && startPressed) resume();
+
+  if (app.mode === 'gesture') {
+    // яркость кадра — раз в секунду
+    app.brightnessT -= dt;
+    if (app.brightnessT <= 0) {
+      app.brightnessT = 1;
+      const b = camera.measureBrightness();
+      if (b !== null) gestures.brightness = b;
+    }
+    // режим «Ошибка»: одна главная подсказка
+    const straight = track.curveAhead(app.player.z, 20) < 0.5;
+    app.hint = coach.update(input.errors, now / 1000, { straight });
+    // обе руки пропали во время гонки — пауза с подсказкой
+    app.lostT = input.handsVisible === 0 ? app.lostT + dt : 0;
+    if (app.state === 'race' && app.lostT > 0.4) {
+      pause('Руки пропали из кадра. Верни обе руки в центр кадра, на уровень груди.');
+    }
+  } else {
+    app.hint = null;
+  }
+  const showHint = app.hint && ['countdown', 'race'].includes(app.state);
+  if (showHint) coachEl.textContent = app.hint.text;
+  coachEl.classList.toggle('show', !!showHint);
+  // на паузе текущая подсказка показывается прямо в карточке
+  if (app.state === 'paused' && app.hint) {
+    const el = $('pause-hint');
+    if (el && el.textContent !== app.hint.text) el.textContent = app.hint.text;
+  }
 
   // игровой цикл с фиксированным шагом, независимо от частоты кадров
   app.acc += dt;
@@ -154,12 +222,21 @@ function frame(now) {
       countdown: app.countdown > -0.8 ? app.countdown : null,
     });
   }
-  drawPreview();
+  drawPreview(camCanvas, camCtx, {
+    video,
+    cameraReady: camera.ready,
+    hands: app.mode === 'gesture' ? app.hands : [],
+    input,
+    hint: app.hint,
+    keyboard: app.mode === 'keyboard',
+  });
   debugEl.textContent =
     `режим: ${app.mode}\n` +
     `скорость: ${Math.round(app.player.speed * KMH)} км/ч\n` +
     `steer: ${input.steer.toFixed(2)} газ: ${input.gas} тормоз: ${input.brake}\n` +
-    `круг: ${app.player.lap}  x: ${app.player.x.toFixed(2)}`;
+    `круг: ${app.player.lap}  x: ${app.player.x.toFixed(2)}\n` +
+    `ошибки: ${(input.errors || []).map((e) => e.id + (e.hand ? ':' + e.hand : '')).join(', ')}\n` +
+    `подсказка: ${app.hint ? app.hint.id : '—'}  яркость: ${Math.round(gestures.brightness)}`;
   requestAnimationFrame(frame);
 }
 
@@ -171,6 +248,10 @@ function setMode(mode) {
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyK') setMode(app.mode === 'keyboard' ? 'gesture' : 'keyboard');
   if (e.code === 'Backquote') debugEl.classList.toggle('hidden'); // отладочная панель
+  if (e.code === 'Escape' || e.code === 'KeyP') {
+    if (app.state === 'paused') resume();
+    else pause();
+  }
 });
 
 // Доступ из консоли для отладки и проверки жюри.

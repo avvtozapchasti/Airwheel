@@ -55,6 +55,14 @@ const app = {
   lostT: 0, // сколько не видно обеих рук
   brightnessT: 0,
   trackerReady: null,
+  // производительность
+  lastVideoTime: -1,
+  fps: 60,
+  fpsFrames: 0,
+  fpsT: 0,
+  slowSec: 0,
+  perfLevel: 0, // 0 — полное качество; дальше: 640×480 → меньше пикселей canvas → детект через кадр
+  frameNo: 0,
 };
 
 const IDLE = { steer: 0, gas: false, brake: false, nitro: false };
@@ -244,7 +252,11 @@ function simulate(input, dt) {
 
 function readInput(now, dt) {
   if (app.mode === 'keyboard') return keyboard.update(dt);
-  if (camera.ready) {
+  app.frameNo++;
+  // Инференс только на новом кадре камеры (экран может быть 120 Гц, а камера — 30 к/с).
+  const skip = app.perfLevel >= 3 && app.frameNo % 2 === 1;
+  if (camera.ready && video.currentTime !== app.lastVideoTime && !skip) {
+    app.lastVideoTime = video.currentTime;
     const res = tracker.detect(video, now);
     if (res) app.hands = res;
   }
@@ -264,7 +276,27 @@ function frame(now) {
   }
 }
 
+// Если FPS держится ниже 24, по шагам снижаем нагрузку.
+function monitorFps(dt) {
+  app.fpsFrames++;
+  app.fpsT += dt;
+  if (app.fpsT < 1) return;
+  app.fps = app.fpsFrames / app.fpsT;
+  app.fpsFrames = 0;
+  app.fpsT = 0;
+  if (document.hidden) return;
+  app.slowSec = app.fps < 24 ? app.slowSec + 1 : 0;
+  if (app.slowSec >= 2 && app.perfLevel < 3) {
+    app.slowSec = 0;
+    app.perfLevel++;
+    if (app.perfLevel === 1 && camera.ready) camera.downgrade(640, 480);
+    if (app.perfLevel === 2) renderer.setQuality(0.7);
+    console.info(`[airwheel] FPS ${app.fps.toFixed(0)}, уровень оптимизации ${app.perfLevel}`);
+  }
+}
+
 function tick(now, dt) {
+  monitorFps(dt);
   const input = (app.input = readInput(now, dt));
   const p = app.player;
 
@@ -343,7 +375,7 @@ function tick(now, dt) {
   if (!debugEl.classList.contains('hidden')) {
     const f = (v) => (v == null ? '—' : v.toFixed(2));
     debugEl.textContent =
-      `режим: ${app.mode}  состояние: ${app.state}\n` +
+      `режим: ${app.mode}  состояние: ${app.state}  FPS: ${app.fps.toFixed(0)}  опт: ${app.perfLevel}\n` +
       `скорость: ${Math.round(p.speed * KMH)} км/ч  x: ${p.x.toFixed(2)}\n` +
       `steer: ${input.steer.toFixed(2)}  газ: ${input.gas}  тормоз: ${input.brake}\n` +
       `fist L: ${f(input.scoreL)}  R: ${f(input.scoreR)}  угол: ${f(input.relDeg)}°\n` +
@@ -373,6 +405,23 @@ $('btn-mute').textContent = audio.muted ? '🔇' : '🔊';
 $('btn-mute').onclick = toggleMute;
 $('btn-kb').onclick = toggleKeyboard;
 $('btn-pause').onclick = () => (app.state === 'paused' ? resume() : pause());
+
+// Тач-кнопки: те же флаги, что и клавиатура.
+document.querySelectorAll('#touch button').forEach((btn) => {
+  const k = btn.dataset.k;
+  const set = (on) => (e) => {
+    e.preventDefault();
+    btn.classList.toggle('active', on);
+    if (k === 'nitro') {
+      if (on) keyboard.queueNitro();
+    } else keyboard.touch[k] = on;
+    if (on) audio.init();
+  };
+  btn.addEventListener('pointerdown', set(true));
+  btn.addEventListener('pointerup', set(false));
+  btn.addEventListener('pointercancel', set(false));
+  btn.addEventListener('pointerleave', set(false));
+});
 
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement) return;

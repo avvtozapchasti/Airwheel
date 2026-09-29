@@ -160,3 +160,60 @@ html, body {
 .main-error { background: rgba(255, 77, 94, 0.14); border: 1px solid rgba(255, 77, 94, 0.4); border-radius: 12px; padding: 12px 14px; margin-top: 10px; }
 .main-error b { color: #ff8a95; }
 .good { color: var(--ok); }
+
+/* ---------- онбординг ---------- */
+.onboarding { width: min(760px, 100%); }
+.steps { display: flex; gap: 6px; margin-bottom: 12px; }
+.steps i { flex: 1; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.15); }
+.steps i.on { background: var(--accent); }
+.meter { display: flex; align-items: center; gap: 12px; margin: 14px 0 6px; }
+.meter span { width: 96px; color: var(--muted); font-size: 14px; }
+.meter em { min-width: 90px; font-style: normal; font-weight: 700; font-size: 14px; text-align: right; }
+.bar { flex: 1; height: 14px; border-radius: 7px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.bar b { display: block; height: 100%; width: 0; background: var(--ok); transition: width 0.15s; }
+.bar b.bad { background: var(--bad); }
+.msg { min-height: 1.4em; color: #ffb3ba !important; font-weight: 600; }
+.msg.ok { color: var(--ok) !important; }
+.wheel-demo { font-size: 38px; text-align: center; margin: 10px 0; letter-spacing: 2px; }
+.tasks { list-style: none; padding: 0; margin: 12px 0; }
+.tasks li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; margin: 6px 0; border-radius: 12px; background: rgba(255, 255, 255, 0.06); font-size: 17px; transition: background 0.3s; }
+.tasks li i { width: 28px; height: 28px; flex: none; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.35); display: grid; place-items: center; font-style: normal; }
+.tasks li.done { background: rgba(51, 224, 122, 0.16); }
+.tasks li.done i { background: var(--ok); border-color: var(--ok); }
+.tasks li.done i::after { content: '✓'; color: #06240f; font-weight: 900; }
+.tasks li.optional { opacity: 0.75; font-size: 15px; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.gestures, .records { width: 100%; border-collapse: collapse; font-size: 14px; }
+.gestures td, .records td { padding: 5px 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.07); }
+.gestures td:first-child { font-size: 18px; width: 64px; white-space: nowrap; }
+.gestures td:last-child { font-weight: 700; color: var(--accent); }
+.records td:last-child { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.records tr.me td { color: var(--accent); }
+.name-row { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.name-row input {
+  flex: 1;
+  min-width: 160px;
+  min-height: 52px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text);
+  font: 600 17px system-ui, sans-serif;
+  user-select: text;
+}
+
+/* ---------- верхняя панель кнопок ---------- */
+.topbar { position: fixed; top: 12px; right: 12px; display: flex; gap: 8px; z-index: 45; }
+.icon-btn {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  border: 0;
+  background: rgba(8, 12, 24, 0.62);
+  color: #fff;
+  font-size: 22px;
+  cursor: pointer;
+}
+.icon-btn:hover { background: rgba(8, 12, 24, 0.85); }
+.icon-btn.on { background: var(--accent); }

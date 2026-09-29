@@ -75,7 +75,7 @@ export function stepPlayer(p, input, dt, track, running = true) {
   p.x -= dx * speedPct * seg.curve * CENTRIFUGAL;
 
   // газ / тормоз / накат
-  if (nitro && !p.finished) p.speed += ACCEL * 2.5 * dt;
+  if (nitro && !p.finished && !control.brake) p.speed += ACCEL * 2.5 * dt;
   else if (control.gas) p.speed += ACCEL * (1 - 0.4 * speedPct) * dt;
   else if (control.brake) p.speed += BRAKING * dt;
   else p.speed += DECEL * dt;

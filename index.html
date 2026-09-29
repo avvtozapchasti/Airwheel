@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#0b0f1a" />
+    <meta name="description" content="AirWheel — гонка, которой управляешь руками через веб-камеру, как рулём." />
+    <title>AirWheel — руль из воздуха</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏎️</text></svg>" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <!-- Превью камеры: зеркальное видео + скелет рук -->
+    <div id="cam-box" class="cam-box">
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="cam-canvas"></canvas>
+      <div id="cam-status" class="cam-status">Камера выключена</div>
+    </div>
+
+    <pre id="debug" class="debug hidden"></pre>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

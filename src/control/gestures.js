@@ -210,7 +210,11 @@ export class GestureController {
       if (s.lm[0].y > LIMITS.handsLowY) errors.push({ id: 'hands_low', hand: s.name });
       if (s.score > FIST_ON && s.score < OPEN_ON) errors.push({ id: 'fist_partial', hand: s.name });
     }
-    if (mixed) errors.push({ id: 'mixed', hand: fistL ? 'R' : 'L' });
+    // Если «открытая» рука на самом деле в промежуточной зоне — настоящая причина
+    // в недожатом кулаке, и подсказку про разные жесты не показываем.
+    const openSlot = fistL ? R : L;
+    const openIsPartial = openSlot.score > FIST_ON && openSlot.score < OPEN_ON;
+    if (mixed && !openIsPartial) errors.push({ id: 'mixed', hand: openSlot.name });
     if (both) {
       const ratio = this.wheel.distRatio;
       if (ratio < LIMITS.tooClose) errors.push({ id: 'too_close', hand: 'both' });

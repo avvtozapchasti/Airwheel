@@ -3,7 +3,7 @@
   publish = "dist"
 
 [[headers]]
-  for = "/wasm/*"
+  for = "/wasm/*.wasm"
   [headers.values]
     Cache-Control = "public, max-age=604800"
     Content-Type = "application/wasm"

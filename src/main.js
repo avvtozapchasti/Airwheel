@@ -10,12 +10,17 @@ import { CameraRig } from './render/cameras.js';
 import { World } from './render/world.js';
 import { buildCarModel } from './render/carModel.js';
 import { Track } from './game/track.js';
-import { computeRacingLine } from './game/profile.js';
+import { computeRacingLine, speedProfile, brakingPoints } from './game/profile.js';
 import { CARS } from './game/cars.js';
-import { createCar, stepCar, placeCar, respawn, tryBoost, STEP, KMH, speedOf } from './game/physics.js';
+import { tryBoost, STEP, KMH, speedOf } from './game/physics.js';
+import { RaceSession } from './game/session.js';
+import { DriveAnalyzer } from './game/analyzer.js';
+import { autopilotInput } from './game/autopilot.js';
 import ALPINE from './game/tracks/alpine.js';
 import { AudioEngine } from './game/audio.js';
-import { formatTime } from './util/format.js';
+import { formatLap } from './util/format.js';
+import { Hud } from './ui/hud.js';
+import { showResults } from './ui/results.js';
 import { drawPreview } from './ui/preview.js';
 import { Onboarding } from './ui/onboarding.js';
 
@@ -50,13 +55,13 @@ const audio = new AudioEngine();
 const gfx = new Graphics($('game'));
 const rig = new CameraRig(gfx.camera);
 const world = new World(gfx);
+const hud = new Hud($('hud'));
 
-const LAPS = 3;
 const IDLE = { steer: 0, gas: false, brake: false, nitro: false };
 
 const app = {
   mode: 'gesture', // 'gesture' | 'keyboard'
-  state: 'onboarding', // onboarding | countdown | race | finished | results | paused
+  state: 'onboarding', // onboarding | racing | results | paused
   hands: [],
   input: IDLE,
   lastFrame: performance.now(),
@@ -70,36 +75,37 @@ const app = {
   fps: 60,
   fpsFrames: 0,
   fpsT: 0,
-  countdown: 0,
-  lastBeep: 4,
-  assist: 0.65,
+  hint: null,
+  settings: { laps: 3, assist: 0.65, cls: 'gt3', track: ALPINE },
 };
+const URLP = new URLSearchParams(location.search);
+if (URLP.has('laps')) app.settings.laps = Math.max(1, Math.min(10, +URLP.get('laps') || 3));
 
-// ---------- трасса и машина ----------
-const game = { track: null, line: null, spec: CARS.gt3, car: null, model: null };
+// ---------- трасса, класс, данные для коуча ----------
+const game = { track: null, spec: null, prof: null, bps: null, session: null, model: null, analyzer: null, driveErrors: [] };
 
-function loadTrack(def) {
+function loadTrack(def, clsId) {
   const track = new Track(def);
   track.racingLine = computeRacingLine(track);
   world.load(track);
+  hud.setTrack(track);
   game.track = track;
+  setClass(clsId);
+}
+
+function setClass(clsId) {
+  game.spec = CARS[clsId];
+  game.prof = speedProfile(game.track, game.track.racingLine, game.spec);
+  game.bps = brakingPoints(game.track, game.prof);
   if (game.model) {
     game.model.root.removeFromParent();
     game.model.dispose();
   }
   game.model = buildCarModel(game.spec, { color: 0xe89b00, player: true });
   gfx.scene.add(game.model.root);
-  resetCar();
 }
 
-function resetCar() {
-  const slot = game.track.gridSlot(0);
-  game.car = createCar(game.spec, game.track, slot);
-  game.race = { lap: 1, lapStart: 0, lapTimes: [], bestLap: null, time: 0, finished: false };
-  rig.snap = true;
-}
-
-loadTrack(ALPINE);
+loadTrack(app.settings.track, app.settings.cls);
 
 // ---------- онбординг ----------
 const onboarding = new Onboarding(screenEl, {
@@ -149,20 +155,66 @@ function setMode(mode) {
 
 // ---------- гонка ----------
 function newRace() {
-  resetCar();
-  app.state = 'countdown';
-  app.countdown = 3;
-  app.lastBeep = 4;
+  const s = app.settings;
+  game.session = new RaceSession({
+    track: game.track,
+    spec: game.spec,
+    laps: s.laps,
+    assist: s.assist,
+    playerColor: '#ffb000',
+    onEvent: onSessionEvent,
+  });
+  game.session.start({ grid: 0 });
+  game.analyzer = new DriveAnalyzer(game.track, game.prof, game.bps, game.spec);
+  app.state = 'racing';
   app.acc = 0;
   app.lostT = 0;
+  rig.snap = true;
   screenEl.classList.add('hidden');
+  hud.show(true);
   coach.reset();
-  if (app.mode === 'gesture') coach.startRecording();
+  coach.startRecording();
+}
+
+function onSessionEvent(e) {
+  switch (e.type) {
+    case 'beep':
+      audio.countdownBeep(e.final);
+      break;
+    case 'go':
+      hud.big('ВПЕРЁД!', 'go');
+      setTimeout(() => hud.big(''), 800);
+      break;
+    case 'wall':
+      if (e.entry?.isPlayer) audio.crash();
+      break;
+    case 'lap':
+      if (e.best && e.lap > 0) {
+        hud.message(`Лучший круг · ${formatLap(e.time)}`, e.overallBest ? 'purple' : 'good');
+        audio.lap();
+      } else {
+        hud.message(`Круг ${e.lap} · ${formatLap(e.time)}`);
+        audio.lap();
+      }
+      break;
+    case 'penalty':
+      hud.message(e.reason === 'wall' ? `Удар о стену: +${e.sec} с` : e.reason === 'cut' ? `Срезка: +${e.sec} с` : `Фальстарт: +${e.sec} с`, 'bad', 2.5);
+      break;
+    case 'respawn':
+      hud.message('Возврат на трассу', 'info', 1.5);
+      break;
+    case 'finish':
+      hud.big('ФИНИШ!', 'gold');
+      audio.finish();
+      break;
+    case 'done':
+      finishRace();
+      break;
+  }
 }
 
 function pause(reason) {
-  if (app.state !== 'race' && app.state !== 'countdown') return;
-  app.pausedFrom = app.state;
+  if (app.state !== 'racing') return;
   app.state = 'paused';
   const how =
     app.mode === 'gesture'
@@ -185,7 +237,7 @@ function pause(reason) {
 
 function resume() {
   if (app.state !== 'paused') return;
-  app.state = app.pausedFrom || 'race';
+  app.state = 'racing';
   app.lostT = 0;
   screenEl.classList.add('hidden');
 }
@@ -193,72 +245,35 @@ function resume() {
 function finishRace() {
   app.state = 'results';
   coach.stopRecording();
-  const r = game.race;
-  screenEl.innerHTML = `
-    <div class="card">
-      <h1>🏁 Финиш</h1>
-      <div class="stats">
-        <div><span>Время</span><b>${formatTime(r.time)}</b></div>
-        <div><span>Лучший круг</span><b>${formatTime(r.bestLap)}</b></div>
-      </div>
-      <p>Круги: ${r.lapTimes.map(formatTime).join(' · ')}</p>
-      <div class="row"><button class="btn primary" id="btn-again">Ещё раз</button></div>
-    </div>`;
-  screenEl.classList.remove('hidden');
-  $('btn-again').onclick = newRace;
+  hud.big('');
+  hud.show(false);
+  coachEl.classList.remove('show');
+  const S = game.session, p = S.player, t = p.timing;
+  showResults(
+    screenEl,
+    {
+      subtitle: `${game.track.name} · ${game.spec.name}`,
+      place: 1,
+      total: 1,
+      time: p.finishTime + p.penalty,
+      bestLap: t.bestLap,
+      lapTimes: t.lapTimes,
+      penalty: p.penalty,
+      coach: coach.summary(),
+      keyboard: app.mode === 'keyboard',
+    },
+    { onRetry: newRace },
+  );
 }
 
-// Один шаг симуляции (120 Гц).
-function simulate(input, dt) {
-  const car = game.car, tr = game.track, r = game.race;
-  if (app.state === 'countdown') {
-    app.countdown -= dt;
-    const n = Math.ceil(app.countdown);
-    if (n < app.lastBeep) {
-      app.lastBeep = n;
-      audio.countdownBeep(n <= 0);
-    }
-    if (app.countdown <= 0) app.state = 'race';
-    stepCar(car, IDLE, dt, tr, { assist: app.assist, frozen: true });
-    return;
-  }
-  if (app.state === 'race' || app.state === 'finished') {
-    const control = r.finished ? { steer: 0, gas: false, brake: true } : input;
-    const events = stepCar(car, control, dt, tr, { assist: app.assist });
-    for (const e of events) {
-      if (e.type === 'wall') audio.crash();
-    }
-    if (!r.finished) {
-      r.time += dt;
-      // круг: прогресс перешёл через очередную длину трассы
-      const lapNow = Math.floor(car.progress / tr.length) + 1;
-      if (lapNow > r.lap) {
-        const t = r.time - r.lapStart;
-        r.lapTimes.push(t);
-        if (r.bestLap === null || t < r.bestLap) r.bestLap = t;
-        r.lapStart = r.time;
-        r.lap = lapNow;
-        if (r.lap > LAPS) {
-          r.finished = true;
-          app.state = 'finished';
-          app.finishT = 3;
-          audio.finish();
-        } else audio.lap();
-      }
-    }
-    if (app.state === 'finished') {
-      app.finishT -= dt;
-      if (app.finishT <= 0) finishRace();
-    }
-    // застрял или развернулся — возвращаем на трассу
-    if (car.stuckT > 3 || car.wrongWayT > 4) respawn(car, tr);
-    return;
-  }
-  if (app.state === 'paused') return;
-  stepCar(car, IDLE, dt, tr, { assist: app.assist, frozen: true });
-}
+// ---------- ввод ----------
+const AUTOPILOT = URLP.has('autopilot');
 
 function readInput(now, dt) {
+  if (AUTOPILOT && game.session?.playerCar) {
+    const kb = keyboard.update(dt);
+    return { ...kb, ...autopilotInput(game.session.playerCar, game.track, game.prof, game.spec, { assist: app.settings.assist }) };
+  }
   if (app.mode === 'keyboard') return keyboard.update(dt);
   // инференс рук — не чаще detectHz и только на новом кадре камеры, отдельно от рендера
   if (camera.ready && video.currentTime !== app.lastVideoTime && now - app.lastDetect >= 1000 / app.detectHz - 2) {
@@ -282,7 +297,6 @@ function frame(now) {
   }
 }
 
-const hudEl = $('hud-lite');
 function tick(now, dt) {
   app.fpsFrames++;
   app.fpsT += dt;
@@ -292,8 +306,10 @@ function tick(now, dt) {
     app.fpsT = 0;
   }
   const input = (app.input = readInput(now, dt));
-  const car = game.car;
-  if (input.nitro && app.state === 'race' && tryBoost(car)) audio.nitro();
+  const S = game.session;
+  const racing = app.state === 'racing' && S;
+  const car = S?.playerCar;
+  if (racing && input.nitro && S.state === 'race' && tryBoost(car)) audio.nitro();
 
   const typing = document.activeElement instanceof HTMLInputElement;
   const startPressed = input.startTrigger || (!typing && keyboard.has('Enter', 'Space'));
@@ -301,6 +317,22 @@ function tick(now, dt) {
   else if (app.state === 'results' && input.startTrigger) newRace();
   else if (app.state === 'onboarding' && onboarding.step === 'start' && !typing && keyboard.has('Enter')) onboarding.h.onStart();
 
+  // физика с фиксированным шагом 120 Гц
+  const physEvents = [];
+  if (racing) {
+    app.acc += dt;
+    let steps = 0;
+    while (app.acc >= STEP && steps < 12) {
+      S.step(STEP, input);
+      if (S.lastPhysics?.length) physEvents.push(...S.lastPhysics);
+      app.acc -= STEP;
+      steps++;
+    }
+    if (steps === 12) app.acc = 0;
+  }
+
+  // режим «Ошибка»: ошибки жестов + ошибки езды (по трассе)
+  const errors = [];
   if (app.mode === 'gesture' && camera.ready) {
     app.brightnessT -= dt;
     if (app.brightnessT <= 0) {
@@ -308,47 +340,59 @@ function tick(now, dt) {
       const b = camera.measureBrightness();
       if (b !== null) gestures.brightness = b;
     }
-    const straight = Math.abs(game.track.kappa[car.idx]) < 1 / 400;
-    app.hint = coach.update(input.errors, now / 1000, { straight });
-    app.lostT = input.handsVisible === 0 ? app.lostT + dt : 0;
-    if (app.state === 'race' && app.lostT > 0.4) pause('Руки пропали из кадра. Верни обе руки в центр кадра, на уровень груди.');
+    errors.push(...input.errors);
+  }
+  if (racing && S.state === 'race' && !S.player.finished) {
+    errors.push(...game.analyzer.update({ car, input, dt, events: physEvents, keyboard: app.mode === 'keyboard' }));
+  }
+  if (app.mode === 'gesture' && camera.ready || racing) {
+    const straight = car ? Math.abs(game.track.kappa[car.idx]) < 1 / 400 : true;
+    app.hint = coach.update(errors, now / 1000, { straight, keyboard: app.mode === 'keyboard' });
   } else app.hint = null;
+  if (app.mode === 'gesture' && camera.ready) {
+    app.lostT = input.handsVisible === 0 ? app.lostT + dt : 0;
+    if (racing && S.state === 'race' && app.lostT > 0.4) pause('Руки пропали из кадра. Верни обе руки в центр кадра, на уровень груди.');
+  }
 
   if (app.state === 'onboarding') {
     onboarding.update(input, dt, { brightness: camera.ready ? gestures.brightness : null, hint: app.hint });
   }
-  const showHint = app.hint && ['countdown', 'race'].includes(app.state);
+  const showHint = app.hint && racing;
   if (showHint && coachEl.textContent !== app.hint.text) coachEl.textContent = app.hint.text;
   coachEl.classList.toggle('show', !!showHint);
 
-  // физика с фиксированным шагом 120 Гц
-  app.acc += dt;
-  let steps = 0;
-  while (app.acc >= STEP && steps < 12) {
-    simulate(input, STEP);
-    app.acc -= STEP;
-    steps++;
-  }
-  if (steps === 12) app.acc = 0;
-  const alpha = app.acc / STEP;
-
   // рендер с интерполяцией между шагами физики
-  game.model.update(car, alpha);
-  const pos = game.model.root.position;
-  rig.update(dt, { pos, heading: game.model.root.rotation.y, pitch: car.pitch, roll: car.roll, speed: speedOf(car), vmax: game.spec.vmax, shake: car.shake, dims: game.spec.dims, s: car.s }, game.track);
-  gfx.followSun(pos);
+  const alpha = app.acc / STEP;
+  if (car) {
+    game.model.update(car, alpha);
+    const pos = game.model.root.position;
+    rig.update(dt, { pos, heading: game.model.root.rotation.y, pitch: car.pitch, roll: car.roll, speed: speedOf(car), vmax: game.spec.vmax, shake: car.shake, dims: game.spec.dims, s: car.s }, game.track);
+    gfx.followSun(pos);
+  }
   world.update(gfx.camera.position);
   gfx.render();
 
-  const racing = ['countdown', 'race', 'finished'].includes(app.state);
-  audio.update(speedOf(car) / game.spec.vmax, car.abs && car.brake > 0.3, car.boostOn, racing);
+  audio.update(car ? speedOf(car) / game.spec.vmax : 0, !!car && car.abs && car.brake > 0.3, !!car?.boostOn, !!racing);
 
-  if (hudEl) {
-    const r = game.race;
-    const cd = app.state === 'countdown' ? `<div class="big">${Math.ceil(app.countdown)}</div>` : '';
-    hudEl.innerHTML = racing
-      ? `${cd}<b>${Math.round(speedOf(car) * KMH)}</b> км/ч · передача ${car.gear + 1} · круг ${Math.min(r.lap, LAPS)}/${LAPS} · ${formatTime(r.time - r.lapStart)} · лучший ${formatTime(r.bestLap)}`
-      : '';
+  if (racing) {
+    const p = S.player;
+    if (S.state === 'countdown') hud.big(String(Math.max(1, Math.ceil(S.countdown))), 'gold');
+    hud.update({
+      dt,
+      car,
+      spec: game.spec,
+      input,
+      timing: p.timing,
+      lapTime: S.lapTimeOf(p),
+      lastLap: p.timing.lapTimes.at(-1)?.time,
+      session: 'Гонка',
+      pos: 1,
+      total: 1,
+      lap: p.timing.lap,
+      laps: S.laps,
+      keyboard: app.mode === 'keyboard',
+      cars: [{ x: car.x, z: car.z, color: '#ffb000', player: true }],
+    });
   }
 
   drawPreview(camCanvas, camCtx, {
@@ -363,11 +407,14 @@ function tick(now, dt) {
   if (!debugEl.classList.contains('hidden')) {
     const info = gfx.renderer.info.render;
     debugEl.textContent =
-      `режим: ${app.mode}  состояние: ${app.state}  FPS: ${app.fps.toFixed(0)}\n` +
+      `режим: ${app.mode}  состояние: ${app.state}/${S?.state}  FPS: ${app.fps.toFixed(0)}\n` +
       `draw calls: ${info.calls}  треугольников: ${info.triangles}\n` +
-      `v: ${Math.round(speedOf(car) * KMH)} км/ч  s: ${car.s.toFixed(0)}  d: ${car.d.toFixed(2)}  δ: ${car.delta.toFixed(3)}\n` +
-      `недоворот: ${car.under.toFixed(2)}  снос: ${car.over.toFixed(2)}  ABS: ${car.abs}  пробукс: ${car.wheelspin}\n` +
-      `steer: ${input.steer.toFixed(2)}  газ: ${input.gas}  тормоз: ${input.brake}`;
+      (car
+        ? `v: ${Math.round(speedOf(car) * KMH)} км/ч  s: ${car.s.toFixed(0)}  d: ${car.d.toFixed(2)}  δ: ${car.delta.toFixed(3)}\n` +
+          `недоворот: ${car.under.toFixed(2)}  снос: ${car.over.toFixed(2)}  ABS: ${car.abs}  пробукс: ${car.wheelspin}\n`
+        : '') +
+      `steer: ${input.steer.toFixed(2)}  газ: ${input.gas}  тормоз: ${input.brake}\n` +
+      `ошибки: ${errors.map((e) => e.id).join(', ')}  подсказка: ${app.hint?.id ?? '—'}`;
   }
 }
 
@@ -383,6 +430,7 @@ function toggleKeyboard() {
     if (camera.ready) setMode('gesture');
     else if (app.state === 'onboarding' || app.state === 'results') {
       app.state = 'onboarding';
+      hud.show(false);
       onboarding.show('camera');
     }
   } else {
@@ -434,7 +482,7 @@ window.addEventListener('unhandledrejection', (e) => {
   e.preventDefault();
 });
 
-window.airwheel = { app, game, gfx, world, rig, keyboard, placeCar };
+window.airwheel = { app, game, gfx, world, rig, keyboard, hud };
 
 function boot() {
   app.trackerReady = tracker.init();

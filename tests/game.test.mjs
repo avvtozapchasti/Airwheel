@@ -6,6 +6,9 @@ import { computeRacingLine, speedProfile, brakingPoints, topSpeed } from '../src
 import { CARS } from '../src/game/cars.js';
 import { createCar, stepCar, STEP } from '../src/game/physics.js';
 import ALPINE from '../src/game/tracks/alpine.js';
+import { autopilotInput } from '../src/game/autopilot.js';
+import { DriveAnalyzer } from '../src/game/analyzer.js';
+import { placeCar } from '../src/game/physics.js';
 
 const TRACKS = [ALPINE];
 
@@ -26,26 +29,14 @@ function build(def) {
   return built.get(def.id);
 }
 
-// Автопилот: pure pursuit по гоночной линии, газ/тормоз по профилю скорости.
+// Автопилот (тот же, что в игре по ?autopilot).
 export function autopilot(tr, spec, prof, { assist = 0.65, laps = 1, pace = 0.97 } = {}) {
-  const line = tr.racingLine;
   const car = createCar(spec, tr, { s: 0, d: 0 });
   let t = 0, walls = 0, vmax = 0;
   const lapTimes = [];
   let lastLap = 0;
   while (t < 400 && lapTimes.length < laps) {
-    const la = Math.max(10, car.u * 0.9);
-    const p = tr.pointAt(car.s + la, line.offset[tr.index(car.s + la)]);
-    let err = Math.atan2(p.x - car.x, p.z - car.z) - car.psi;
-    while (err > Math.PI) err -= 2 * Math.PI;
-    while (err < -Math.PI) err += 2 * Math.PI;
-    const Ld = Math.hypot(p.x - car.x, p.z - car.z);
-    const dReq = Math.atan((spec.wheelbase * 2 * Math.sin(err)) / Ld);
-    const spd = Math.max(Math.abs(car.u), 1);
-    const aLat = (spec.grip * (spec.mass * 9.81 + spec.downforce * car.u * car.u)) / spec.mass;
-    const dMax = Math.min(spec.steerLock, Math.atan((spec.wheelbase * (spec.steerOver + (1 - assist) * 0.5) * aLat) / (spd * spd)));
-    const vT = prof.v[tr.index(car.s + car.u * 0.25)] * pace;
-    const input = { steer: Math.max(-1, Math.min(1, -dReq / dMax)), gas: car.u < vT - 0.5, brake: car.u > vT + 1.5 };
+    const input = autopilotInput(car, tr, prof, spec, { assist, pace });
     for (const e of stepCar(car, input, STEP, tr, { assist })) if (e.type === 'wall') walls++;
     vmax = Math.max(vmax, car.u);
     t += STEP;
@@ -85,6 +76,49 @@ test('GT3: автопилот проходит круг Alpine без ударо
   assert.equal(r.walls, 0, 'ударов: ' + r.walls);
   assert.ok(r.lapTimes[1] < prof.lapTime * 1.12, `круг ${r.lapTimes[1].toFixed(2)} при идеале ${prof.lapTime.toFixed(2)}`);
   console.log(`    круг автопилота ${r.lapTimes[1].toFixed(2)} с, идеал ${prof.lapTime.toFixed(2)} с, vmax ${(r.vmax * 3.6).toFixed(0)} км/ч`);
+});
+
+// --- анализ езды для режима «Ошибка» ---
+function analyze(setup, input = {}) {
+  const tr = build(ALPINE);
+  const spec = CARS.gt3;
+  const prof = speedProfile(tr, tr.racingLine, spec);
+  const bps = brakingPoints(tr, prof);
+  const an = new DriveAnalyzer(tr, prof, bps, spec);
+  const car = createCar(spec, tr, { s: 0, d: 0 });
+  setup(car, tr, prof, bps);
+  let errs = [];
+  for (let k = 0; k < 5; k++) errs = an.update({ car, input: { steer: 0, gas: false, brake: false, ...input }, dt: 1 / 30, keyboard: true });
+  return errs.map((e) => e.id + (e.name ? ':' + e.name : ''));
+}
+
+test('анализ: несёшься к шпильке без торможения → «Впереди шпилька»', () => {
+  const ids = analyze((car, tr, prof, bps) => {
+    const bp = bps.find((b) => b.corner.type === 'hairpin');
+    placeCar(car, tr, bp.sBrake + 5);
+    car.u = bp.vEntry;
+  }, { gas: true });
+  assert.ok(ids.includes('brake_zone:шпилька'), ids.join(','));
+});
+
+test('анализ: в повороте с газом быстрее предела → corner_fast', () => {
+  const ids = analyze((car, tr, prof, bps) => {
+    const bp = bps.find((b) => b.corner.type === 'hairpin');
+    placeCar(car, tr, bp.sMin);
+    car.u = bp.vMin * 1.4;
+  }, { gas: true });
+  assert.ok(ids.includes('corner_fast'), ids.join(','));
+});
+
+test('анализ: колёса на траве, тормоз и накат на прямой', () => {
+  assert.ok(analyze((car) => (car.wheelsOut = 3, car.u = 20)).includes('grass'));
+  const onStraight = (car, tr) => {
+    placeCar(car, tr, 120);
+    car.u = 30;
+  };
+  assert.ok(analyze(onStraight, { brake: true }).includes('brake_straight'));
+  assert.ok(analyze(onStraight, {}).includes('coast_straight'));
+  assert.ok(!analyze(onStraight, { gas: true }).length, 'на газу по прямой ошибок нет');
 });
 
 console.log(`\nВсе проверки игры пройдены: ${passed}`);

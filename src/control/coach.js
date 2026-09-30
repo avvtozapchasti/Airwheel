@@ -6,19 +6,67 @@
 //  - у каждого правила своя задержка срабатывания (delay), чтобы не ругаться на случайный кадр;
 //  - «импульсные» ошибки (рывок руля, короткое нитро) залипают на sticky секунд;
 //  - за заезд собирается статистика эпизодов по каждому типу.
+// Приоритет: сначала безопасность (стена, зона торможения, скорость в повороте, трава),
+// потом техника рук, потом освещение. Правила езды приходят из game/analyzer.js.
 
 export const MIN_SHOW_SEC = 1.5;
+const SAFETY = 100; // приоритет, с которого подсказка считается подсказкой безопасности
 
 const handName = (h) => (h === 'L' ? 'Левая' : 'Правая');
 
 export const RULES = {
-  dark: {
-    priority: 100,
+  // --- безопасность: ситуация на трассе ---
+  wall_hit: {
+    priority: 130,
     delay: 0,
-    title: 'Темно',
-    text: () => 'Слишком темно. Включи свет или повернись к окну.',
-    advice: 'Камере не хватало света, и руки распознавались хуже. Сядь лицом к окну или лампе.',
+    title: 'Удар о стену',
+    text: () => 'Ты задел стену. Держись ближе к центру трассы на узких участках.',
+    advice: 'Машина касалась стен. На узких участках держись ближе к центру и не режь поворот впритык к бетону.',
   },
+  brake_zone: {
+    priority: 125,
+    delay: 0,
+    sticky: 0.8,
+    title: 'Поздно тормозишь',
+    text: (h, e) => `Впереди ${e?.name || 'поворот'}. Раскрой ладони и тормози сейчас.`,
+    kbText: (h, e) => `Впереди ${e?.name || 'поворот'}. Тормози сейчас (↓).`,
+    advice: 'Ты поздно начинал тормозить перед поворотами. Раскрывай ладони у таблички 100 м — раньше, чем кажется.',
+  },
+  corner_fast: {
+    priority: 120,
+    delay: 0.15,
+    sticky: 1.0,
+    title: 'Быстро в поворот',
+    text: () => 'Слишком быстро для поворота. Ладони раскрой раньше.',
+    kbText: () => 'Слишком быстро для поворота. Тормози раньше.',
+    advice: 'В повороты заезжал слишком быстро и с газом. Сначала тормоз (ладони), потом поворот, газ — на выходе.',
+  },
+  grass: {
+    priority: 115,
+    delay: 0.25,
+    title: 'Трава',
+    text: () => 'Колёса на траве. Сбрось газ и вернись на асфальт плавно.',
+    kbText: () => 'Колёса на траве. Отпусти газ и плавно вернись на асфальт.',
+    advice: 'Колёса часто уходили на траву. Сбрасывай газ и возвращайся на асфальт плавно, без резкого руля.',
+  },
+  understeer: {
+    priority: 112,
+    delay: 0.25,
+    sticky: 1.0,
+    title: 'Недоворот',
+    text: () => 'Не довернул. Поверни руки сильнее и убери газ.',
+    kbText: () => 'Не довернул. Поверни сильнее и отпусти газ.',
+    advice: 'Машина не доворачивала и уходила наружу. Сбрасывай газ и поворачивай руки сильнее, но плавно.',
+  },
+  jerky_speed: {
+    priority: 110,
+    delay: 0,
+    sticky: 1.2,
+    title: 'Резкий руль на скорости',
+    text: () => 'Крутишь слишком резко на скорости. Поворачивай плавнее, иначе занос.',
+    advice: 'На скорости руль дёргался. Поворачивай плавно — на большой скорости хватает небольшого наклона рук.',
+  },
+  // --- техника рук ---
   hands_lost: {
     priority: 95,
     delay: 0.2,
@@ -84,15 +132,44 @@ export const RULES = {
     text: () => 'Руль уходит вбок. Выровняй руки по горизонтали.',
     advice: 'На прямых руль был слегка повёрнут, машину тянуло в сторону. Держи руки на одной высоте.',
   },
+  brake_straight: {
+    priority: 28,
+    delay: 0.6,
+    title: 'Тормоз на прямой',
+    text: () => 'Тормозишь на прямой. Сожми кулаки, чтобы ехать быстрее.',
+    kbText: () => 'Тормозишь на прямой. Держи газ (↑).',
+    advice: 'Тормозил на прямых без причины. На прямой держи кулаки сжатыми до таблички торможения.',
+  },
+  coast_straight: {
+    priority: 26,
+    delay: 1.2,
+    title: 'Нет газа на прямой',
+    text: () => 'Газ не нажат на свободной прямой. Сожми оба кулака крепче.',
+    kbText: () => 'Газ не нажат на прямой. Держи ↑.',
+    advice: 'На свободных прямых газ пропадал. Сжимай кулаки полностью, пока не увидишь табличку торможения.',
+  },
   nitro_short: {
     priority: 20,
     delay: 0,
     sticky: 0.3,
-    title: 'Нитро не сработало',
+    title: 'Ускорение не сработало',
     text: () => 'Держи большой палец вверх дольше, пока не заполнится кольцо.',
-    advice: 'Нитро срывалось: палец опускался раньше времени. Держи большой палец вверх, пока кольцо не заполнится.',
+    advice: 'Ускорение срывалось: палец опускался раньше времени. Держи большой палец вверх, пока кольцо не заполнится.',
+  },
+  // --- освещение ---
+  dark: {
+    priority: 10,
+    delay: 0,
+    title: 'Темно',
+    text: () => 'Слишком темно. Включи свет или повернись к окну.',
+    advice: 'Камере не хватало света, и руки распознавались хуже. Сядь лицом к окну или лампе.',
   },
 };
+
+export function ruleText(id, hand, err, keyboard) {
+  const r = RULES[id];
+  return (keyboard && r.kbText ? r.kbText : r.text)(hand, err);
+}
 
 export class Coach {
   constructor() {
@@ -115,14 +192,15 @@ export class Coach {
     this.recording = false;
   }
 
-  // errors — [{id, hand}] из gestures.js; ctx.straight — едем по прямой.
+  // errors — [{id, hand, ...}] из gestures.js и analyzer.js; ctx.straight — едем по прямой,
+  // ctx.keyboard — текст подсказки для клавиатуры.
   update(errors, tSec, ctx = {}) {
     const raw = new Map();
     for (const e of errors) {
       const r = RULES[e.id];
       if (!r) continue;
       if (r.needsStraight && !ctx.straight) continue;
-      if (!raw.has(e.id)) raw.set(e.id, e.hand);
+      if (!raw.has(e.id)) raw.set(e.id, e);
     }
 
     let best = null;
@@ -131,7 +209,8 @@ export class Coach {
       const st = (this.state[id] ||= { since: null, activeUntil: -1, active: false, hand: null });
       if (raw.has(id)) {
         if (st.since === null) st.since = tSec;
-        st.hand = raw.get(id);
+        st.hand = raw.get(id).hand;
+        st.err = raw.get(id);
         if (r.sticky && tSec - st.since >= r.delay) st.activeUntil = tSec + r.sticky;
       } else {
         st.since = null;
@@ -144,14 +223,17 @@ export class Coach {
 
     // Подсказка держится минимум MIN_SHOW_SEC, затем уступает самой важной активной.
     const cur = this.current;
-    if (cur && tSec - cur.shownAt < MIN_SHOW_SEC) return cur;
+    // исключение: подсказка безопасности (стена, тормоз) вытесняет менее важную сразу
+    const preempt = best && cur && best !== cur.id && RULES[best].priority >= SAFETY && RULES[best].priority > RULES[cur.id].priority;
+    if (cur && tSec - cur.shownAt < MIN_SHOW_SEC && !preempt) return cur;
     if (!best) {
       this.current = null;
       return null;
     }
     const hand = this.state[best].hand;
-    if (!cur || cur.id !== best || cur.hand !== hand) {
-      this.current = { id: best, hand, text: RULES[best].text(hand), shownAt: tSec };
+    const text = ruleText(best, hand, this.state[best].err, ctx.keyboard);
+    if (!cur || cur.id !== best || cur.hand !== hand || cur.text !== text) {
+      this.current = { id: best, hand, text, shownAt: tSec };
     }
     return this.current;
   }

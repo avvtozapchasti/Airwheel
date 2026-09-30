@@ -168,4 +168,25 @@ test('подсказка держится минимум 1,5 с и статис�
   assert.equal(coach.summary().main.id, 'mixed');
 });
 
+test('подсказка безопасности вытесняет подсказку про руки сразу, с названием поворота', () => {
+  const coach = new Coach();
+  coach.update([{ id: 'fist_partial', hand: 'L' }], 0);
+  assert.equal(coach.update([{ id: 'fist_partial', hand: 'L' }], 0.6)?.id, 'fist_partial');
+  const h = coach.update([{ id: 'fist_partial', hand: 'L' }, { id: 'brake_zone', hand: null, name: 'шпилька' }], 0.7);
+  assert.equal(h.id, 'brake_zone');
+  assert.equal(h.text, 'Впереди шпилька. Раскрой ладони и тормози сейчас.');
+  const kb = new Coach().update([{ id: 'brake_zone', name: 'шикана' }], 0, { keyboard: true });
+  assert.equal(kb.text, 'Впереди шикана. Тормози сейчас (↓).');
+});
+
+test('приоритеты: безопасность > техника рук > освещение', () => {
+  assert.ok(RULES.wall_hit.priority > RULES.brake_zone.priority);
+  assert.ok(RULES.brake_zone.priority > RULES.hands_lost.priority);
+  assert.ok(RULES.fist_partial.priority > RULES.dark.priority);
+  for (const id of ['wall_hit', 'brake_zone', 'corner_fast', 'understeer', 'jerky_speed', 'grass', 'brake_straight', 'coast_straight']) {
+    assert.ok(RULES[id], id);
+    console.log('   ', id, '—', RULES[id].text(null, { name: 'шпилька' }));
+  }
+});
+
 console.log(`\nВсе проверки пройдены: ${passed}`);

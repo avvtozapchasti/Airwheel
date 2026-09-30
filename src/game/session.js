@@ -305,7 +305,8 @@ export class RaceSession {
       e.finishTime = this.time + Math.max(0, total - prog) / avg;
       e.finished = true;
       e.estimated = true;
-      if (!e.timing.bestLap && e.bot) e.timing.bestLap = e.bot.prof.lapTime * (1.01 + Math.random() * 0.02);
+      // лучший круг не быстрее среднего темпа этой машины
+      if (!e.timing.bestLap) e.timing.bestLap = (e.finishTime / this.laps) * (0.985 + Math.random() * 0.01);
     }
     this.state = 'done';
     this.emit({ type: 'done' });

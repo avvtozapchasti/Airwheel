@@ -135,7 +135,9 @@ export function buildTerrain(track, env, grid, { cell = 10 } = {}) {
   const near = {};
   // высота рельефа в точке
   const heightFn = (x, z) => {
-    const q = grid.nearest(x, z, near);
+    let q = grid.nearest(x, z, near);
+    // под мостом рельеф не повторяет дорогу — там лагуна
+    if (q && track.bridge && track.onBridge(q.i * track.ds)) q = null;
     let r, yRoad, wall;
     if (q) {
       r = q.r;
@@ -160,6 +162,11 @@ export function buildTerrain(track, env, grid, { cell = 10 } = {}) {
       h += hills * smoothstep(wall + 6, wall + 160, r) * (1 - seaAt(x, z));
     }
     if (sea) h = h + ((sea.level ?? -1.5) - 3 - h) * seaAt(x, z);
+    const br = track.bridge;
+    if (br) {
+      const dl = Math.hypot(x - br.cx, z - br.cz);
+      h += (-4 - h) * smoothstep(br.radius, br.radius * 0.55, dl);
+    }
     return h;
   };
 
@@ -245,5 +252,8 @@ export function buildTerrain(track, env, grid, { cell = 10 } = {}) {
     // та же диагональ, что в треугольниках
     return u + v < 1 ? a + (bb - a) * u + (c - a) * v : d + (c - d) * (1 - u) + (bb - d) * (1 - v);
   };
-  return { mesh, heightAt, seaAt, bounds: { x0, z0, x1: x0 + (nx - 1) * cell, z1: z0 + (nz - 1) * cell } };
+  // вода для расстановки окружения: море + лагуна под мостом
+  const br = track.bridge;
+  const waterAt = (x, z) => Math.max(seaAt(x, z), br ? smoothstep(br.radius * 1.12, br.radius * 0.95, Math.hypot(x - br.cx, z - br.cz)) : 0);
+  return { mesh, heightAt, seaAt: waterAt, bounds: { x0, z0, x1: x0 + (nx - 1) * cell, z1: z0 + (nz - 1) * cell } };
 }

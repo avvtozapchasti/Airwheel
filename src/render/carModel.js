@@ -399,7 +399,8 @@ export function buildCarModel(spec, { color = 0xd81e2a, accent = 0x111111, numbe
     parts.forEach((p) => p.dispose());
   }
   lo.add(new THREE.Mesh(P.loWheels, S.wheelLo));
-  lod.addLevel(lo, player ? 400 : 70);
+  const loDist = player ? 400 : 70;
+  lod.addLevel(lo, loDist);
 
   const model = {
     root,
@@ -430,6 +431,9 @@ export function buildCarModel(spec, { color = 0xd81e2a, accent = 0x111111, numbe
       const brake = state.brakeLight ?? state.brake > 0.2;
       const k = brake ? 3.2 : 0.55;
       tail.color.setRGB(k, k * 0.03, k * 0.03);
+    },
+    setLodScale(k) {
+      lod.levels[1].distance = loDist * k;
     },
     dispose() {
       paint.dispose();

@@ -120,7 +120,7 @@ export function buildRoad(track, { wet = false, rubber = null } = {}) {
     vertexColors: true,
     roughness: 1,
     metalness: 0,
-    normalScale: new THREE.Vector2(wet ? 0.22 : 0.5, wet ? 0.22 : 0.5),
+    normalScale: new THREE.Vector2(wet ? 0.22 : 0.35, wet ? 0.22 : 0.35),
     envMapIntensity: wet ? 1.0 : 0.3,
   });
   const mesh = new THREE.Mesh(geo.build(), mat);
@@ -163,8 +163,11 @@ function buildWalls(track, kind) {
   const group = new THREE.Group();
   group.name = 'walls';
   const concrete = kind === 'concrete';
-  const H = concrete ? 1.15 : 0.8;
+  const tyres = kind === 'tyres';
+  const H = concrete ? 1.15 : tyres ? 0.75 : 0.8;
   const geo = new Geo();
+  // на мосту вместо обычного ограждения — бетонные парапеты (строятся с мостом)
+  const segs = track.bridge ? runs(track, (i) => !track.onBridge(i * track.ds)) : [[0, track.n]];
   for (const side of [1, -1]) {
     const wd = (i) => (side > 0 ? track.wallL[i] : -track.wallR[i]);
     const base = (i) => edgeY(track, i, wd(i)) - 0.25;
@@ -176,18 +179,19 @@ function buildWalls(track, kind) {
       strip(geo, track, 0, track.n, (i) => [wd(i), wd(i) + th], { y: top, u: (c) => 0.9 + c * 0.1, vLen: 6 });
       strip(geo, track, 0, track.n, (i) => [wd(i) + th, wd(i) + th], { y: (i, d, c) => (c === 0 ? top(i) : base(i)), u: (c) => 1 - c, vLen: 6 });
     } else {
-      strip(geo, track, 0, track.n, (i) => [wd(i), wd(i)], {
-        y: (i, d, c) => (c === 0 ? base(i) : base(i) + H + 0.25),
-        u: (c) => c,
-        vLen: 4,
-      });
+      for (const [i0, cnt] of segs)
+        strip(geo, track, i0, cnt, (i) => [wd(i), wd(i)], {
+          y: (i, d, c) => (c === 0 ? base(i) : base(i) + H + 0.25),
+          u: (c) => c,
+          vLen: tyres ? 3 : 4,
+        });
     }
   }
-  const tex = concrete ? TX.concreteWall() : TX.armco();
+  const tex = concrete ? TX.concreteWall() : tyres ? TX.tyres() : TX.armco();
   const mat = new THREE.MeshStandardMaterial({
     map: tex,
-    roughness: concrete ? 0.85 : 0.35,
-    metalness: concrete ? 0 : 0.55,
+    roughness: concrete || tyres ? 0.85 : 0.35,
+    metalness: concrete || tyres ? 0 : 0.55,
     side: THREE.DoubleSide,
     envMapIntensity: concrete ? 0.3 : 0.9,
   });
@@ -196,7 +200,7 @@ function buildWalls(track, kind) {
   walls.castShadow = false;
   group.add(walls);
 
-  if (!concrete) {
+  if (!concrete && !tyres) {
     // стойки armco — один InstancedMesh
     const step = Math.max(1, Math.round(4 / track.ds));
     const cnt = Math.ceil(track.n / step) * 2;
@@ -215,7 +219,7 @@ function buildWalls(track, kind) {
     posts.count = k;
     posts.computeBoundingSphere();
     group.add(posts);
-  } else {
+  } else if (concrete) {
     // сетка-забор над бетонной стеной
     const fg = new Geo();
     for (const side of [1, -1]) {
@@ -500,6 +504,70 @@ function buildTunnel(track) {
   return group;
 }
 
+// Мост над лагуной: настил (толщина 1.2 м), бетонные парапеты, опоры до дна.
+function buildBridge(track) {
+  const br = track.bridge;
+  if (!br) return null;
+  const group = new THREE.Group();
+  group.name = 'bridge';
+  const i0 = track.index(br.s0);
+  const count = Math.round(br.length / track.ds);
+  const dL = (i) => track.wallL[i] + 0.5, dR = (i) => -track.wallR[i] - 0.5;
+  const top = (i, d) => edgeY(track, i, d) - 0.02;
+  const deck = new Geo();
+  // низ настила и боковины
+  strip(deck, track, i0, count, (i) => [dR(i), dL(i)], { y: (i) => track.y[i] - 1.25, u: (c) => c, vLen: 8 });
+  strip(deck, track, i0, count, (i) => [dL(i), dL(i)], { y: (i, d, c) => (c === 0 ? top(i, dL(i)) : track.y[i] - 1.25), u: (c) => c, vLen: 8 });
+  strip(deck, track, i0, count, (i) => [dR(i), dR(i)], { y: (i, d, c) => (c === 0 ? track.y[i] - 1.25 : top(i, dR(i))), u: (c) => c, vLen: 8 });
+  // верх настила за краем дороги (обочина моста)
+  strip(deck, track, i0, count, (i) => [dL(i), track.hw[i]], { y: (i, d) => top(i, d), u: (c) => c, vLen: 8 });
+  strip(deck, track, i0, count, (i) => [-track.hw[i], dR(i)], { y: (i, d) => top(i, d), u: (c) => c, vLen: 8 });
+  const conc = TX.concrete();
+  const deckMesh = new THREE.Mesh(deck.build(), new THREE.MeshStandardMaterial({ map: conc.map, color: 0xb9b4aa, roughness: 0.85, side: THREE.DoubleSide }));
+  deckMesh.castShadow = deckMesh.receiveShadow = true;
+  group.add(deckMesh);
+  // парапеты
+  const par = new Geo();
+  for (const side of [1, -1]) {
+    const d0 = (i) => (side > 0 ? track.wallL[i] : -track.wallR[i]);
+    strip(par, track, i0, count, (i) => [d0(i), d0(i)], { y: (i, d, c) => top(i, d0(i)) + (c === 0 ? 0 : 1.1), u: (c) => c, vLen: 6 });
+    strip(par, track, i0, count, (i) => [d0(i), d0(i) + side * 0.4], { y: (i) => top(i, d0(i)) + 1.1, u: (c) => 0.9 + c * 0.1, vLen: 6 });
+  }
+  const parMesh = new THREE.Mesh(par.build(), new THREE.MeshStandardMaterial({ map: TX.concreteWall(), roughness: 0.85, side: THREE.DoubleSide }));
+  parMesh.receiveShadow = true;
+  group.add(parMesh);
+  // опоры
+  const step = Math.max(1, Math.round(24 / track.ds));
+  const pillars = [];
+  for (let k = step; k < count - step / 2; k += step) {
+    const i = track.wrap(i0 + k);
+    for (const off of [-0.45, 0.45]) {
+      const d = off * track.hw[i] * 2;
+      const h = track.y[i] - 1.25 + 5;
+      const g = new THREE.BoxGeometry(1.6, h, 1.6);
+      g.rotateY(track.heading[i]);
+      g.translate(track.x[i] + track.nx[i] * d, track.y[i] - 1.25 - h / 2, track.z[i] + track.nz[i] * d);
+      pillars.push(g);
+    }
+  }
+  if (pillars.length) {
+    const pm = new THREE.Mesh(mergeGeometries(pillars), new THREE.MeshStandardMaterial({ map: conc.map, color: 0xa8a39a, roughness: 0.9 }));
+    pm.castShadow = true;
+    group.add(pm);
+    pillars.forEach((g) => g.dispose());
+  }
+  // вода лагуны
+  const water = new THREE.Mesh(
+    new THREE.CircleGeometry(br.radius * 1.05, 48),
+    new THREE.MeshStandardMaterial({ color: 0x1f6f80, roughness: 0.1, metalness: 0.1, normalMap: TX.water(), normalScale: new THREE.Vector2(0.5, 0.5), envMapIntensity: 1.2 }),
+  );
+  water.rotation.x = -Math.PI / 2;
+  water.position.set(br.cx, 0.1, br.cz);
+  water.receiveShadow = true;
+  group.add(water);
+  return group;
+}
+
 // Вся трасса целиком. env — окружение трассы, heightAt — высота рельефа.
 export function buildTrackGroup(track, env, { heightAt = null, rubber = null } = {}) {
   const group = new THREE.Group();
@@ -512,6 +580,8 @@ export function buildTrackGroup(track, env, { heightAt = null, rubber = null } =
   group.add(buildBoards(track));
   group.add(buildGrandstands(track, track.def.grandstands, heightAt));
   group.userData.setStartLights = start.userData.setLights;
+  const bridge = buildBridge(track);
+  if (bridge) group.add(bridge);
   const tunnel = buildTunnel(track);
   group.userData.lights = [];
   if (tunnel) {

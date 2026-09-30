@@ -7,6 +7,7 @@ import { CARS } from '../src/game/cars.js';
 import { createCar, stepCar, STEP } from '../src/game/physics.js';
 import ALPINE from '../src/game/tracks/alpine.js';
 import STREET from '../src/game/tracks/street.js';
+import COASTAL from '../src/game/tracks/coastal.js';
 import { autopilotInput } from '../src/game/autopilot.js';
 import { DriveAnalyzer } from '../src/game/analyzer.js';
 import { placeCar } from '../src/game/physics.js';
@@ -14,13 +15,12 @@ import { createBots, updateBots, collidePlayer } from '../src/game/bots.js';
 import { RaceSession } from '../src/game/session.js';
 import { QualiSession } from '../src/game/quali.js';
 
-const TRACKS = [ALPINE, STREET];
+const TRACKS = [ALPINE, COASTAL, STREET];
 
 let passed = 0;
+const queue = [];
 function test(name, fn) {
-  fn();
-  passed++;
-  console.log('✓', name);
+  queue.push([name, fn]);
 }
 
 const built = new Map();
@@ -255,4 +255,49 @@ test('Street Night: узкая 9–11 м с участком ~8 м, шпильк
   console.log(`    ширина ${min.toFixed(1)}–${max.toFixed(1)} м, круг автопилота ${r.lapTimes[0].toFixed(1)} с (касаний стен: ${r.walls})`);
 });
 
+test('Coastal Sprint: 2 шпильки, 90° после самой быстрой прямой, мост; GT3 и F1 проходят без ударов', () => {
+  const tr = build(COASTAL);
+  const prof = speedProfile(tr, tr.racingLine, CARS.gt3);
+  const bps = brakingPoints(tr, prof);
+  assert.equal(bps.filter((b) => b.corner.type === 'hairpin').length, 2);
+  // первый поворот после линии старта — 90° в конце самой быстрой прямой
+  const t1 = bps[0];
+  assert.equal(t1.corner.type, 'turn90');
+  assert.ok(t1.vEntry * 3.6 > 250, 'перед T1 разгон до ' + (t1.vEntry * 3.6).toFixed(0));
+  assert.ok(tr.bridge && tr.bridge.length > 150, 'мост');
+  for (const cls of ['gt3', 'f1']) {
+    const pr = speedProfile(tr, tr.racingLine, CARS[cls]);
+    const r = autopilot(tr, CARS[cls], pr, { laps: 1 });
+    assert.equal(r.walls, 0, cls + ' ударов');
+    console.log(`    ${cls}: круг ${r.lapTimes[0].toFixed(1)} с`);
+  }
+});
+
+test('графика: автоподбор понижает пресет, если средний FPS < 40 за 3 с', async () => {
+  globalThis.window ??= { devicePixelRatio: 1, matchMedia: () => ({ matches: false }) };
+  globalThis.document ??= { hidden: false };
+  const { QualityManager } = await import('../src/render/quality.js');
+  const applied = [];
+  const q = new QualityManager({ apply: (p) => applied.push(p.id) });
+  q.setMode('auto');
+  assert.equal(q.current.id, 'high');
+  for (let t = 0; t < 7; t += 1 / 30) q.update(1 / 30, true); // 30 FPS
+  assert.equal(q.current.id, 'medium');
+  for (let t = 0; t < 7; t += 1 / 30) q.update(1 / 30, true);
+  assert.equal(q.current.id, 'low');
+  const fixed = new QualityManager({ apply: () => {} });
+  fixed.setMode('high');
+  for (let t = 0; t < 10; t += 1 / 20) fixed.update(1 / 20, true);
+  assert.equal(fixed.current.id, 'high', 'ручной пресет не трогаем');
+  const fast = new QualityManager({ apply: () => {} });
+  fast.setMode('auto');
+  for (let t = 0; t < 10; t += 1 / 60) fast.update(1 / 60, true);
+  assert.equal(fast.current.id, 'high', 'при 60 FPS не понижаем');
+});
+
+for (const [name, fn] of queue) {
+  await fn();
+  passed++;
+  console.log('✓', name);
+}
 console.log(`\nВсе проверки игры пройдены: ${passed}`);

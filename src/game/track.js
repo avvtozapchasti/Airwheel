@@ -144,6 +144,13 @@ export class Track {
     this.bounds = this.computeBounds();
     this.corners = this.findCorners((def.corners || []).map((c) => ({ ...c, t: (c.t - shift + 1) % 1 })));
     this.tShift = shift;
+    // мост: диапазон s и центр лагуны под ним
+    if (def.bridge) {
+      const w = (t) => ((((t - shift) % 1) + 1) % 1) * this.length;
+      const s0 = w(def.bridge.from), s1 = w(def.bridge.to);
+      const iL = this.index(w(def.bridge.lagoon));
+      this.bridge = { s0, s1, length: (((s1 - s0) % this.length) + this.length) % this.length, cx: this.x[iL], cz: this.z[iL], radius: def.bridge.radius ?? 90 };
+    }
   }
 
   // Повороты из данных: вершина — максимум |κ| рядом с подсказкой t,
@@ -300,6 +307,12 @@ export class Track {
     const s = -(10 + 8 * k);
     const i = this.index(s);
     return { s, d: side * Math.min(3.3, this.hw[i] * 0.3) };
+  }
+
+  // Находится ли s на мосту.
+  onBridge(s) {
+    const b = this.bridge;
+    return !!b && (((s - b.s0) % this.length) + this.length) % this.length <= b.length;
   }
 
   // Поверхность под точкой с боковым смещением d на индексе i.

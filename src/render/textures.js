@@ -405,6 +405,32 @@ export function water() {
   });
 }
 
+// Шинное ограждение: ряды шин, сверху — красно-белая полоса (u — по высоте).
+export function tyres() {
+  return cached('tyres', () => {
+    const c = canvas(64, 128), ctx = c.getContext('2d');
+    ctx.fillStyle = '#141414';
+    ctx.fillRect(0, 0, 64, 128);
+    for (let y = 0; y < 128; y += 16) {
+      for (let x = 0; x < 50; x += 12) {
+        ctx.fillStyle = '#262626';
+        ctx.beginPath();
+        ctx.ellipse(x + 6, y + 8, 5, 7, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#0b0b0b';
+        ctx.beginPath();
+        ctx.ellipse(x + 6, y + 8, 2, 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    for (let y = 0; y < 128; y += 32) {
+      ctx.fillStyle = (y / 32) % 2 ? '#e8e8e8' : '#d42020';
+      ctx.fillRect(48, y, 16, 32);
+    }
+    return toTexture(c);
+  });
+}
+
 export function disposeAll() {
   for (const v of cache.values()) {
     if (v?.isTexture) v.dispose();

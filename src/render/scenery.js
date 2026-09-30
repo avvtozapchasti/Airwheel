@@ -495,7 +495,7 @@ export function buildScenery(track, env, grid, heightAt, { density = 1, seaAt = 
     for (let k = 0; k < sc.rocks.count * density; k++) {
       const scale = 0.4 + Math.pow(r(), 3) * 3.2;
       const pt = sampleOutside(track, grid, r, 2 + scale, sc.rocks.far ?? 220, 1 + scale);
-      if (!pt) continue;
+      if (!pt || seaAt(pt.x, pt.z) > 0.01) continue;
       q.setFromEuler(new THREE.Euler(r() * 0.4, r() * Math.PI * 2, r() * 0.4));
       m.compose(p.set(pt.x, heightAt(pt.x, pt.z) - scale * 0.25, pt.z), q, s.set(scale, scale, scale));
       const v = 0.7 + r() * 0.4;

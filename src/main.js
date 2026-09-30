@@ -11,6 +11,7 @@ import { CameraRig, FlyScript } from './render/cameras.js';
 import { World } from './render/world.js';
 import { buildCarModel } from './render/carModel.js';
 import { Podium } from './render/podium.js';
+import { QualityManager } from './render/quality.js';
 import { Track } from './game/track.js';
 import { computeRacingLine, speedProfile, brakingPoints } from './game/profile.js';
 import { CARS, CLASS_IDS } from './game/cars.js';
@@ -65,6 +66,21 @@ const hud = new Hud($('hud'));
 const podium = new Podium();
 
 const IDLE = { steer: 0, gas: false, brake: false, nitro: false, errors: [] };
+let lodScale = 1;
+// Пресеты графики: всё, что можно поменять на лету, применяется сразу; плотность объектов —
+// при следующей загрузке трассы.
+const quality = new QualityManager({
+  apply: (p) => {
+    gfx.setQuality(p);
+    gfx.applyFar();
+    world.setRealLights(p.realLights);
+    lodScale = p.lodScale;
+    // вызывается после объявления app и game (quality.setMode ниже)
+    for (const m of [game.model, ...game.botModels]) m?.setLodScale(p.lodScale);
+    app.detectHz = p.id === 'low' ? 24 : 30;
+  },
+  onAuto: (p, fps) => hud.message(`Графика: ${p.name.toLowerCase()} (FPS ${Math.round(fps)})`, 'info', 2.5),
+});
 const PLAYER = { name: 'Ты', code: 'ТЫ', color: '#ffb000' };
 const URLP = new URLSearchParams(location.search);
 const AUTOPILOT = URLP.has('autopilot');
@@ -75,6 +91,7 @@ if (!CARS[settings.cls]) settings.cls = 'gt3';
 if (URLP.has('laps')) settings.laps = Math.max(1, Math.min(10, +URLP.get('laps') || 3));
 if (URLP.has('track') && TRACK_BY_ID[URLP.get('track')]) settings.trackId = URLP.get('track');
 if (URLP.has('class') && CARS[URLP.get('class')]) settings.cls = URLP.get('class');
+if (URLP.has('graphics')) settings.graphics = URLP.get('graphics');
 
 const app = {
   mode: 'gesture', // 'gesture' | 'keyboard'
@@ -116,7 +133,8 @@ function loadTrack(id) {
   if (game.trackId === id && game.track) return;
   const track = new Track(TRACK_BY_ID[id]);
   track.racingLine = computeRacingLine(track);
-  world.load(track);
+  world.load(track, quality.current);
+  game.density = quality.current.density;
   hud.setTrack(track);
   game.track = track;
   game.trackId = id;
@@ -133,11 +151,13 @@ function setClass(clsId) {
     game.model.dispose();
   }
   game.model = buildCarModel(game.spec, { color: 0xffb000, player: true });
+  game.model.setLodScale(lodScale);
   gfx.scene.add(game.model.root);
   world.attachHeadlight(game.model);
 }
 
 function prepare() {
+  if (game.density !== quality.current.density) game.trackId = null; // другой пресет — перестроить
   loadTrack(settings.trackId);
   setClass(settings.cls);
 }
@@ -156,6 +176,7 @@ function spawnBots() {
   game.bots = createBots(11, game.spec, game.track, { difficulty: settings.difficulty, bps: game.bps });
   for (const b of game.bots) {
     const m = buildCarModel(game.spec, { color: b.color });
+    m.setLodScale(lodScale);
     m.bot = b;
     game.botModels.push(m);
   }
@@ -168,6 +189,7 @@ function showBots(on) {
   }
 }
 
+quality.setMode(settings.graphics);
 prepare();
 
 // ---------- онбординг и меню ----------
@@ -188,7 +210,10 @@ const onboarding = new Onboarding(screenEl, {
 const menu = new Menu(screenEl, {
   tracks: TRACKS,
   classes: CLASS_IDS.map((id) => CARS[id]),
-  onChange: (s) => saveSettings(s),
+  onChange: (s) => {
+    saveSettings(s);
+    if (quality.mode !== s.graphics) quality.setMode(s.graphics);
+  },
   onStart: (format) => {
     audio.init();
     startWeekend(format);
@@ -588,6 +613,8 @@ function tick(now, dt) {
     if (input.startTrigger || enter) startRace();
   } else if (app.state === 'results' && input.startTrigger) startWeekend(app.format);
 
+  quality.update(dt, !!driving);
+
   // физика с фиксированным шагом 120 Гц
   const physEvents = [];
   if (driving) {
@@ -665,6 +692,7 @@ function tick(now, dt) {
     const showCars = driving || app.state === 'paused';
     world.update(gfx.camera.position, {
       dt,
+      lodScale,
       focus: car && showCars ? car : { s: game.track.project(gfx.camera.position.x, gfx.camera.position.z, -1).s },
       bots: app.state === 'race' || (app.state === 'paused' && app.pausedFrom === 'race') ? game.bots : null,
     });
@@ -688,7 +716,7 @@ function tick(now, dt) {
   if (!debugEl.classList.contains('hidden')) {
     const info = gfx.renderer.info.render;
     debugEl.textContent =
-      `режим: ${app.mode}  состояние: ${app.state}/${S?.state}  FPS: ${app.fps.toFixed(0)}\n` +
+      `режим: ${app.mode}  состояние: ${app.state}/${S?.state}  FPS: ${app.fps.toFixed(0)}  графика: ${quality.current.name}${quality.mode === 'auto' ? ' (авто)' : ''}\n` +
       `draw calls: ${info.calls}  треугольников: ${info.triangles}\n` +
       (car
         ? `v: ${Math.round(speedOf(car) * KMH)} км/ч  s: ${car.s.toFixed(0)}  d: ${car.d.toFixed(2)}  δ: ${car.delta.toFixed(3)}\n` +

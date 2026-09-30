@@ -153,14 +153,23 @@ export function speedProfile(track, line, spec, { gripK = 1, brakeK = 0.85 } = {
   }
   // проход назад (торможение) и вперёд (разгон), дважды — круг замкнут
   for (let pass = 0; pass < 2; pass++) {
+    // уклон: на спуске тормозить хуже, на подъёме разгоняться хуже;
+    // круг трения: если шина занята поворотом, на торможение и разгон остаётся меньше
+    const circle = (i, vv) => {
+      const lat = vv * vv * Math.abs(line.kappa[i]);
+      const cap = (mu * (spec.mass * G + spec.downforce * vv * vv)) / spec.mass;
+      return Math.sqrt(Math.max(0.12, 1 - (lat / cap) ** 2));
+    };
     for (let k = 2 * n - 1; k >= 0; k--) {
       const i = k % n, j = (i + 1) % n;
-      const lim = Math.sqrt(v[j] * v[j] + 2 * brakeAt(spec, v[j], mu) * brakeK * line.segLen[i]);
+      const a = Math.max(1, brakeAt(spec, v[j], mu) * brakeK * circle(i, v[j]) + G * (track.grade?.[i] ?? 0));
+      const lim = Math.sqrt(v[j] * v[j] + 2 * a * line.segLen[i]);
       if (v[i] > lim) v[i] = lim;
     }
     for (let k = 0; k < 2 * n; k++) {
       const i = k % n, j = (i + 1) % n;
-      const lim = Math.sqrt(v[i] * v[i] + 2 * Math.max(0.2, accelAt(spec, v[i], mu)) * line.segLen[i]);
+      const a = Math.max(0.2, accelAt(spec, v[i], mu) * Math.max(0.35, circle(i, v[i])) - G * (track.grade?.[i] ?? 0));
+      const lim = Math.sqrt(v[i] * v[i] + 2 * a * line.segLen[i]);
       if (v[j] > lim) v[j] = lim;
     }
   }

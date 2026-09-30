@@ -45,4 +45,41 @@ export const CARS = {
   },
 };
 
+CARS.f1 = {
+  id: 'f1',
+  name: 'F1',
+  title: 'F1 — формула',
+  description: 'Лёгкая и злая: огромная прижимная сила, тормозит позже, но не прощает ошибок руля и травы.',
+  mass: 800,
+  power: 750e3, // ≈ 1000 л.с. с гибридом
+  vmax: 340 * KMH,
+  drag: 0.878,
+  rolling: 0.015,
+  downforce: 2.6, // ~3 веса машины на 340 км/ч: в быстрых поворотах намного быстрее GT3
+  grip: 1.55,
+  brake: 0.95,
+  brakeBias: 0.58,
+  wheelbase: 3.6,
+  weightFront: 0.45,
+  cgHeight: 0.3,
+  yawInertia: 1.2,
+  corneringStiffness: 20, // жёсткие слики — острая реакция
+  rearGrip: 1.05, // запас зада меньше, чем у GT3 — строже к ошибкам
+  rearStiffness: 1.12,
+  steerLock: 0.4,
+  steerRate: 4.6,
+  steerOver: 1.03,
+  offGrip: 0.3, // на траве днище и слики почти не держат
+  offDrag: 0.42,
+  kerbGrip: 0.9,
+  maxForce: 11500,
+  traction: 1.0,
+  gears: [23, 33, 43, 53, 63, 74, 85, 98],
+  rpm: { idle: 4000, max: 12500, shift: 12000 },
+  shiftTime: 0.03,
+  boost: { name: 'ERS', time: 4.0, power: 1.21, recharge: 1 / 45, harvest: 0.22 }, // заряд — при торможении
+  dims: { length: 5.6, width: 2.0, height: 0.95, track: 1.62, wheelR: 0.36, wheelW: 0.38, eye: 1.02, hood: -0.1, cgZ: -0.3 },
+  sound: { cylinders: 6, base: 1, character: 'whine' },
+};
+
 export const CLASS_IDS = Object.keys(CARS);

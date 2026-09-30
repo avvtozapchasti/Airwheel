@@ -207,4 +207,30 @@ test('квалификация: разгон, 2 попытки, протокол
   console.log(`    квала: игрок P${me.pos} ${me.time.toFixed(2)} с, поул ${rows[0].time.toFixed(2)} с`);
 });
 
+test('F1: ~340 км/ч, в быстрых поворотах намного быстрее GT3, тормозит позже, проходит круг', () => {
+  const v = topSpeed(CARS.f1) * 3.6;
+  assert.ok(v > 330 && v < 350, 'vmax F1 ' + v);
+  const tr = build(ALPINE);
+  const gt3 = speedProfile(tr, tr.racingLine, CARS.gt3);
+  const f1 = speedProfile(tr, tr.racingLine, CARS.f1);
+  assert.ok(f1.lapTime < gt3.lapTime * 0.85, `F1 ${f1.lapTime.toFixed(1)} против GT3 ${gt3.lapTime.toFixed(1)}`);
+  // быстрый поворот (R≈120–250 м): у F1 скорость заметно выше
+  let i0 = -1;
+  for (let i = 0; i < tr.n; i++) {
+    const R = 1 / Math.abs(tr.racingLine.kappa[i]);
+    if (R > 120 && R < 250) {
+      i0 = i;
+      break;
+    }
+  }
+  assert.ok(f1.v[i0] > gt3.v[i0] * 1.3, `поворот: F1 ${(f1.v[i0] * 3.6).toFixed(0)} против GT3 ${(gt3.v[i0] * 3.6).toFixed(0)} км/ч`);
+  // зона торможения в шпильку с той же скорости короче
+  const hp = (prof) => brakingPoints(tr, prof).find((b) => b.corner.type === 'hairpin');
+  const zone = (b) => b.sMin - b.sBrake;
+  assert.ok(zone(hp(f1)) < zone(hp(gt3)), `шпилька: F1 ${zone(hp(f1)).toFixed(0)} м против GT3 ${zone(hp(gt3)).toFixed(0)} м`);
+  const r = autopilot(tr, CARS.f1, f1, { laps: 2 });
+  assert.equal(r.walls, 0);
+  console.log(`    F1: круг ${r.lapTimes[1].toFixed(2)} с (GT3 идеал ${gt3.lapTime.toFixed(1)} с), тормозной путь в шпильку ${zone(hp(f1)).toFixed(0)} м против ${zone(hp(gt3)).toFixed(0)} м`);
+});
+
 console.log(`\nВсе проверки игры пройдены: ${passed}`);

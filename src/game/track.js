@@ -12,7 +12,7 @@ export const SAMPLE_M = 2; // шаг выборки, м
 
 // Профиль по трассе: число или ключи [[t, value], ...], t ∈ [0, 1).
 // Линейная периодическая интерполяция + сглаживание скользящим средним (дважды).
-export function sampleProfile(keys, n, smooth = 0) {
+export function sampleProfile(keys, n, smooth = 0, shift = 0) {
   const out = new Float32Array(n);
   if (typeof keys === 'number' || keys == null) {
     out.fill(keys ?? 0);
@@ -20,7 +20,7 @@ export function sampleProfile(keys, n, smooth = 0) {
   }
   const k = [...keys].sort((a, b) => a[0] - b[0]);
   for (let i = 0; i < n; i++) {
-    const t = i / n;
+    const t = (i / n + shift) % 1;
     let j = -1;
     for (let q = 0; q < k.length; q++) if (k[q][0] <= t) j = q;
     const a = j < 0 ? [k[k.length - 1][0] - 1, k[k.length - 1][1]] : k[j];
@@ -63,6 +63,11 @@ export class Track {
     const approx = curve.getLength();
     const n = (this.n = Math.max(64, Math.round(approx / SAMPLE_M)));
     const P = curve.getSpacedPoints(n);
+    P.pop();
+    // линия старта может быть сдвинута вперёд по трассе (решётка должна стоять на прямой)
+    const shiftK = Math.round((def.startOffset || 0) / (approx / n));
+    for (let k = 0; k < shiftK; k++) P.push(P.shift());
+    const shift = shiftK / n; // профили и повороты заданы в t исходной раскладки
     this.x = new Float32Array(n);
     this.z = new Float32Array(n);
     let len = 0;
@@ -104,11 +109,11 @@ export class Track {
 
     // --- профили ---
     const m = (meters) => Math.max(1, Math.round(meters / this.ds));
-    this.hw = sampleProfile(def.width ?? 13, n, m(30)).map((w) => w / 2);
-    this.y = sampleProfile(def.height ?? 0, n, m(45));
-    this.bank = sampleProfile(def.bank ?? 0, n, m(30)).map((deg) => (deg * Math.PI) / 180);
-    const runL = sampleProfile(def.runoffLeft ?? def.runoff ?? 10, n, m(20));
-    const runR = sampleProfile(def.runoffRight ?? def.runoff ?? 10, n, m(20));
+    this.hw = sampleProfile(def.width ?? 13, n, m(30), shift).map((w) => w / 2);
+    this.y = sampleProfile(def.height ?? 0, n, m(45), shift);
+    this.bank = sampleProfile(def.bank ?? 0, n, m(30), shift).map((deg) => (deg * Math.PI) / 180);
+    const runL = sampleProfile(def.runoffLeft ?? def.runoff ?? 10, n, m(20), shift);
+    const runR = sampleProfile(def.runoffRight ?? def.runoff ?? 10, n, m(20), shift);
     this.wallL = new Float32Array(n);
     this.wallR = new Float32Array(n);
     for (let i = 0; i < n; i++) {
@@ -137,7 +142,8 @@ export class Track {
     // сектора S1/S2/S3 — три равные части круга
     this.sectors = [0, len / 3, (2 * len) / 3];
     this.bounds = this.computeBounds();
-    this.corners = this.findCorners(def.corners || []);
+    this.corners = this.findCorners((def.corners || []).map((c) => ({ ...c, t: (c.t - shift + 1) % 1 })));
+    this.tShift = shift;
   }
 
   // Повороты из данных: вершина — максимум |κ| рядом с подсказкой t,

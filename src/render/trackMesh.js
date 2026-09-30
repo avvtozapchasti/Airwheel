@@ -389,7 +389,7 @@ function buildGrandstands(track, defs, heightAt) {
   const U = 24; // длина секции, м
   const mats = [];
   for (const g of defs || []) {
-    const s0 = g.t * track.length;
+    const s0 = (((g.t - (track.tShift || 0)) % 1 + 1) % 1) * track.length;
     for (let k = 0; k < g.count; k++) {
       const s = s0 + (k - (g.count - 1) / 2) * (U + 2);
       const i = track.index(s);

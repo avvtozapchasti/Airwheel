@@ -137,7 +137,7 @@ export function stepCar(car, input, dt, track, opts = {}) {
     car.reverseT = 0;
     car.reverse = false;
   }
-  if (car.reverseT > 0.6) car.reverse = true;
+  if (car.reverseT > 0.6 && !opts.noReverse) car.reverse = true;
 
   const u = car.u;
   const speed = Math.abs(u);

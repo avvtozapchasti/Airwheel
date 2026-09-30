@@ -297,19 +297,23 @@ html, body {
 .hud-pos .pos small { font-size: 18px; color: #fff; font-weight: 700; margin: 0 2px; }
 .hud-pos .lap { font-size: 13px; color: var(--muted); letter-spacing: 0.06em; margin-top: 4px; }
 .hud-pos .lap b { color: #fff; font-size: 16px; }
+.hud-pos .nb { font-size: 12px; margin-top: 4px; color: var(--muted); }
+.hud-pos .nb b { color: #fff; }
+.hud-pos .nb .a b { color: #ff9aa4; }
+.hud-pos .nb .b b { color: #8ff0b5; }
 .hud-tower {
-  position: absolute; left: 16px; top: 108px; width: 196px; border-radius: 12px; overflow: hidden;
+  position: absolute; left: 16px; top: 142px; width: 196px; border-radius: 12px; overflow: hidden;
   background: rgba(8, 12, 24, 0.62); font-size: 13px;
 }
 .hud-tower:empty { display: none; }
-.hud-tower .row { display: flex; align-items: center; gap: 6px; padding: 3px 8px; height: 22px; border-bottom: 1px solid rgba(255,255,255,0.05); }
-.hud-tower .row .p { width: 18px; text-align: right; font-weight: 800; color: var(--muted); }
-.hud-tower .row i { width: 4px; height: 14px; border-radius: 2px; }
-.hud-tower .row .c { flex: 1; font-weight: 800; letter-spacing: 0.04em; }
-.hud-tower .row .g { color: var(--muted); font-size: 12px; }
-.hud-tower .row.me { background: rgba(255, 204, 51, 0.9); }
-.hud-tower .row.me .p, .hud-tower .row.me .c, .hud-tower .row.me .g { color: #1a1400; }
-.hud-tower .row.out { opacity: 0.55; }
+.hud-tower .tr { display: flex; align-items: center; gap: 6px; padding: 3px 8px; height: 22px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+.hud-tower .tr .p { width: 18px; text-align: right; font-weight: 800; color: var(--muted); }
+.hud-tower .tr i { width: 4px; height: 14px; border-radius: 2px; }
+.hud-tower .tr .c { flex: 1; font-weight: 800; letter-spacing: 0.04em; }
+.hud-tower .tr .g { color: var(--muted); font-size: 12px; }
+.hud-tower .tr.me { background: rgba(255, 204, 51, 0.9); }
+.hud-tower .tr.me .p, .hud-tower .tr.me .c, .hud-tower .tr.me .g { color: #1a1400; }
+.hud-tower .tr.out { opacity: 0.55; }
 .hud-timing {
   position: absolute; left: 50%; top: 12px; transform: translateX(-50%); text-align: center;
   padding: 6px 18px 8px; border-radius: 14px; background: rgba(8, 12, 24, 0.66); min-width: 250px;
@@ -355,7 +359,7 @@ html, body {
   .hud-pos { left: 8px; top: 8px; padding: 4px 10px 6px; min-width: 110px; }
   .hud-pos .pos { font-size: 30px; }
   .hud-tower { left: 8px; top: 74px; width: 150px; font-size: 11px; }
-  .hud-tower .row { height: 17px; padding: 1px 6px; }
+  .hud-tower .tr { height: 17px; padding: 1px 6px; }
   .hud-timing { top: 6px; min-width: 190px; padding: 4px 12px; }
   .hud-timing .time { font-size: 22px; }
   .hud-map { width: 110px; height: 110px; top: 60px; right: 8px; }

@@ -45,6 +45,7 @@ export class Hud {
     const pos = el('div', 'hud-pos', root);
     this.posEl = el('div', 'pos', pos);
     this.lapEl = el('div', 'lap', pos);
+    this.nbEl = el('div', 'nb', pos);
     // башня лидеров
     this.tower = el('div', 'hud-tower', root);
     // тайминг
@@ -117,6 +118,13 @@ export class Hud {
     setHtml(this.posEl, s.pos ? `<small>P</small>${s.pos}<small>/${s.total}</small>` : '');
     setHtml(this.lapEl, s.laps ? `КРУГ <b>${Math.min(s.lap, s.laps)}/${s.laps}</b>` : s.lapLabel || '');
     setText(this.sessionEl, s.session || '');
+    const nb = s.neighbours || {};
+    const g = (x) => (x.laps ? `${x.laps} кр` : (x.sec ?? 0).toFixed(1));
+    setHtml(
+      this.nbEl,
+      (nb.ahead ? `<div class="a">▲ ${nb.ahead.entry.code} <b>−${g(nb.ahead)}</b></div>` : '') +
+        (nb.behind ? `<div class="b">▼ ${nb.behind.entry.code} <b>+${g(nb.behind)}</b></div>` : ''),
+    );
     if (t) {
       const cur = s.lapTime ?? 0;
       setText(this.timeEl, formatTime(cur));
@@ -148,7 +156,7 @@ export class Hud {
       const rows = s.tower
         .map(
           (r) =>
-            `<div class="row${r.player ? ' me' : ''}${r.out ? ' out' : ''}"><span class="p">${r.pos}</span><i style="background:${r.color}"></i><span class="c">${r.code}</span><span class="g">${r.gap}</span></div>`,
+            `<div class="tr${r.player ? ' me' : ''}${r.out ? ' out' : ''}"><span class="p">${r.pos}</span><i style="background:${r.color}"></i><span class="c">${r.code}</span><span class="g">${r.gap}</span></div>`,
         )
         .join('');
       setHtml(this.tower, rows);

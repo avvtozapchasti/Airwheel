@@ -9,6 +9,8 @@ import ALPINE from '../src/game/tracks/alpine.js';
 import { autopilotInput } from '../src/game/autopilot.js';
 import { DriveAnalyzer } from '../src/game/analyzer.js';
 import { placeCar } from '../src/game/physics.js';
+import { createBots, updateBots, collidePlayer } from '../src/game/bots.js';
+import { RaceSession } from '../src/game/session.js';
 
 const TRACKS = [ALPINE];
 
@@ -119,6 +121,60 @@ test('анализ: колёса на траве, тормоз и накат н�
   assert.ok(analyze(onStraight, { brake: true }).includes('brake_straight'));
   assert.ok(analyze(onStraight, {}).includes('coast_straight'));
   assert.ok(!analyze(onStraight, { gas: true }).length, 'на газу по прямой ошибок нет');
+});
+
+test('боты: 11 машин проходят 2 круга без NaN, быстрые впереди, есть обгоны', () => {
+  const tr = build(ALPINE);
+  const spec = CARS.gt3;
+  const prof = speedProfile(tr, tr.racingLine, spec);
+  const bots = createBots(11, spec, tr, { seed: 42, difficulty: 'medium', bps: brakingPoints(tr, prof) });
+  // стартуют в обратном порядке темпа — медленные впереди, чтобы проверить обгоны
+  const order = [...bots].sort((a, b) => a.pace - b.pace);
+  order.forEach((b, k) => b.place(tr.gridSlot(k).s, tr.gridSlot(k).d));
+  let t = 0, overtakes = 0;
+  let prevOrder = order.map((b) => b.code).join();
+  while (t < 200 && Math.min(...bots.map((b) => b.progress)) < 2 * tr.length) {
+    updateBots(bots, { dt: STEP, player: null, raceTime: t, started: true });
+    t += STEP;
+    for (const b of bots) assert.ok(Number.isFinite(b.x) && Number.isFinite(b.progress) && Number.isFinite(b.d), 'NaN у ' + b.code);
+    for (const b of bots) assert.ok(Math.abs(b.d) < tr.hw[b.idx] + 2, `${b.code} вылетел: d=${b.d.toFixed(1)}`);
+    const ord = [...bots].sort((a, b) => b.progress - a.progress).map((b) => b.code).join();
+    if (ord !== prevOrder) overtakes++;
+    prevOrder = ord;
+  }
+  assert.ok(t < 200, 'боты не доехали 2 круга');
+  const lapT = t / 2;
+  assert.ok(lapT > prof.lapTime && lapT < prof.lapTime * 1.4, `круг ботов ${lapT.toFixed(1)} при идеале ${prof.lapTime.toFixed(1)}`);
+  assert.ok(overtakes > 3, 'обгонов: ' + overtakes);
+  console.log(`    2 круга за ${t.toFixed(1)} с, смен порядка: ${overtakes}`);
+});
+
+test('гонка: игрок на автопилоте + 11 ботов, решётка, огни, финиш, протокол с очками', () => {
+  const tr = build(ALPINE);
+  const spec = CARS.gt3;
+  const prof = speedProfile(tr, tr.racingLine, spec);
+  const bps = brakingPoints(tr, prof);
+  const bots = createBots(11, spec, tr, { seed: 7, bps });
+  const events = [];
+  const S = new RaceSession({ track: tr, spec, laps: 1, bots, onEvent: (e) => events.push(e.type) });
+  const order = [...bots];
+  order.splice(5, 0, 'player');
+  S.start(order);
+  let guard = 0;
+  while (S.state !== 'done' && guard++ < 120 * 200) {
+    const input = S.state === 'grid' ? { steer: 0, gas: false, brake: true } : autopilotInput(S.playerCar, tr, prof, spec, { pace: 0.9 });
+    S.step(STEP, input);
+    for (const b of bots) collidePlayer(S.playerCar, [b], tr);
+  }
+  assert.equal(S.state, 'done');
+  assert.equal(events.filter((e) => e === 'light').length, 5, 'пять огней');
+  assert.ok(events.includes('go') && events.includes('finish'));
+  assert.ok(!events.includes('penalty'), 'без фальстарта при удержании тормоза');
+  const rows = S.results();
+  assert.equal(rows.length, 12);
+  assert.deepEqual(rows.slice(0, 3).map((r) => r.points), [25, 18, 15]);
+  for (let k = 1; k < rows.length; k++) assert.ok(rows[k].time >= rows[k - 1].time, 'протокол по времени');
+  console.log(`    игрок: P${rows.find((r) => r.player).pos}, победитель ${rows[0].name} ${rows[0].time.toFixed(2)} с`);
 });
 
 console.log(`\nВсе проверки игры пройдены: ${passed}`);

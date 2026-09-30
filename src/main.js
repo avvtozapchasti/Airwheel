@@ -1,4 +1,5 @@
 import './style.css';
+import * as THREE from 'three';
 import { Camera, cameraErrorText } from './vision/camera.js';
 import { HandTracker } from './vision/hands.js';
 import { GestureController } from './control/gestures.js';
@@ -6,7 +7,7 @@ import { Wheel } from './control/wheel.js';
 import { Coach } from './control/coach.js';
 import { KeyboardControl } from './control/keyboard.js';
 import { Graphics, hasWebGL2 } from './render/scene.js';
-import { CameraRig } from './render/cameras.js';
+import { CameraRig, FlyScript } from './render/cameras.js';
 import { World } from './render/world.js';
 import { buildCarModel } from './render/carModel.js';
 import { Track } from './game/track.js';
@@ -14,6 +15,7 @@ import { computeRacingLine, speedProfile, brakingPoints } from './game/profile.j
 import { CARS } from './game/cars.js';
 import { tryBoost, STEP, KMH, speedOf } from './game/physics.js';
 import { RaceSession } from './game/session.js';
+import { createBots } from './game/bots.js';
 import { DriveAnalyzer } from './game/analyzer.js';
 import { autopilotInput } from './game/autopilot.js';
 import ALPINE from './game/tracks/alpine.js';
@@ -76,13 +78,13 @@ const app = {
   fpsFrames: 0,
   fpsT: 0,
   hint: null,
-  settings: { laps: 3, assist: 0.65, cls: 'gt3', track: ALPINE },
+  settings: { laps: 3, assist: 0.65, cls: 'gt3', track: ALPINE, difficulty: 'medium' },
 };
 const URLP = new URLSearchParams(location.search);
 if (URLP.has('laps')) app.settings.laps = Math.max(1, Math.min(10, +URLP.get('laps') || 3));
 
 // ---------- трасса, класс, данные для коуча ----------
-const game = { track: null, spec: null, prof: null, bps: null, session: null, model: null, analyzer: null, driveErrors: [] };
+const game = { track: null, spec: null, prof: null, bps: null, session: null, model: null, analyzer: null, botModels: [] };
 
 function loadTrack(def, clsId) {
   const track = new Track(def);
@@ -154,43 +156,88 @@ function setMode(mode) {
 }
 
 // ---------- гонка ----------
+function clearBotModels() {
+  for (const m of game.botModels) {
+    m.root.removeFromParent();
+    m.dispose();
+  }
+  game.botModels = [];
+}
+
 function newRace() {
-  const s = app.settings;
+  const st = app.settings;
+  const bots = createBots(11, game.spec, game.track, { difficulty: st.difficulty, bps: game.bps });
+  // этап без квалификации: боты по темпу, игрок — седьмым
+  const order = [...bots].sort((x, y) => y.pace - x.pace);
+  order.splice(6, 0, 'player');
+  clearBotModels();
+  for (const b of bots) {
+    const m = buildCarModel(game.spec, { color: b.color });
+    m.bot = b;
+    gfx.scene.add(m.root);
+    game.botModels.push(m);
+  }
   game.session = new RaceSession({
     track: game.track,
     spec: game.spec,
-    laps: s.laps,
-    assist: s.assist,
-    playerColor: '#ffb000',
+    laps: st.laps,
+    assist: st.assist,
+    player: { name: 'Ты', code: 'ТЫ', color: '#ffb000' },
     onEvent: onSessionEvent,
   });
-  game.session.start({ grid: 0 });
+  game.session.start(order);
   game.analyzer = new DriveAnalyzer(game.track, game.prof, game.bps, game.spec);
   app.state = 'racing';
   app.acc = 0;
   app.lostT = 0;
   rig.snap = true;
+  rig.script = gridFlyover(game.session);
   screenEl.classList.add('hidden');
   hud.show(true);
+  hud.setLights(0);
   coach.reset();
   coach.startRecording();
 }
 
+// Панорама решётки: от первых рядов вдоль машин к игроку.
+function gridFlyover(S) {
+  const tr = game.track;
+  const P = (s, d, h) => {
+    const p = tr.pointAt(s, d);
+    return new THREE.Vector3(p.x, p.y + h, p.z);
+  };
+  const ps = S.player.slot.s;
+  const keys = [
+    { t: 0, pos: P(25, -tr.hw[0] - 6, 7), look: P(-20, 0, 0), fov: 50 },
+    { t: 1.6, pos: P(-40, tr.hw[0] + 5, 5), look: P(-60, 0, 0), fov: 55 },
+    { t: 3.2, pos: P(ps - 9, 0, 2.6), look: P(ps + 8, 0, 0.8), fov: 60 },
+  ];
+  return new FlyScript(keys, { onEnd: () => (rig.script = null) });
+}
+
 function onSessionEvent(e) {
   switch (e.type) {
-    case 'beep':
-      audio.countdownBeep(e.final);
+    case 'light':
+      hud.setLights(e.n);
+      audio.countdownBeep(false);
       break;
     case 'go':
-      hud.big('ВПЕРЁД!', 'go');
-      setTimeout(() => hud.big(''), 800);
+      hud.setLights(0, true);
+      setTimeout(() => hud.setLights(0), 900);
+      audio.countdownBeep(true);
+      break;
+    case 'overtake':
+      hud.message(`Обгон! P${e.pos}`, 'good', 1.6);
+      break;
+    case 'contact':
+      audio.crash();
       break;
     case 'wall':
       if (e.entry?.isPlayer) audio.crash();
       break;
     case 'lap':
       if (e.best && e.lap > 0) {
-        hud.message(`Лучший круг · ${formatLap(e.time)}`, e.overallBest ? 'purple' : 'good');
+        hud.message(`${e.fastest ? 'Лучший круг гонки' : 'Лучший круг'} · ${formatLap(e.time)}`, e.fastest ? 'purple' : 'good');
         audio.lap();
       } else {
         hud.message(`Круг ${e.lap} · ${formatLap(e.time)}`);
@@ -249,16 +296,19 @@ function finishRace() {
   hud.show(false);
   coachEl.classList.remove('show');
   const S = game.session, p = S.player, t = p.timing;
+  const rows = S.results();
+  const me = rows.find((r) => r.player);
   showResults(
     screenEl,
     {
-      subtitle: `${game.track.name} · ${game.spec.name}`,
-      place: 1,
-      total: 1,
-      time: p.finishTime + p.penalty,
+      subtitle: `${game.track.name} · ${game.spec.name} · ${S.laps} круг(а)`,
+      place: me.pos,
+      total: rows.length,
+      time: me.time,
       bestLap: t.bestLap,
       lapTimes: t.lapTimes,
       penalty: p.penalty,
+      standings: rows,
       coach: coach.summary(),
       keyboard: app.mode === 'keyboard',
     },
@@ -272,6 +322,7 @@ const AUTOPILOT = URLP.has('autopilot');
 function readInput(now, dt) {
   if (AUTOPILOT && game.session?.playerCar) {
     const kb = keyboard.update(dt);
+    if (game.session.state === 'grid') return { ...kb, gas: false, brake: true };
     return { ...kb, ...autopilotInput(game.session.playerCar, game.track, game.prof, game.spec, { assist: app.settings.assist }) };
   }
   if (app.mode === 'keyboard') return keyboard.update(dt);
@@ -369,6 +420,7 @@ function tick(now, dt) {
     rig.update(dt, { pos, heading: game.model.root.rotation.y, pitch: car.pitch, roll: car.roll, speed: speedOf(car), vmax: game.spec.vmax, shake: car.shake, dims: game.spec.dims, s: car.s }, game.track);
     gfx.followSun(pos);
   }
+  for (const m of game.botModels) m.update(m.bot, alpha);
   world.update(gfx.camera.position);
   gfx.render();
 
@@ -376,7 +428,8 @@ function tick(now, dt) {
 
   if (racing) {
     const p = S.player;
-    if (S.state === 'countdown') hud.big(String(Math.max(1, Math.ceil(S.countdown))), 'gold');
+    if (S.state === 'grid' && S.phaseT < 0) hud.big('');
+    const nb = S.neighbours();
     hud.update({
       dt,
       car,
@@ -385,13 +438,15 @@ function tick(now, dt) {
       timing: p.timing,
       lapTime: S.lapTimeOf(p),
       lastLap: p.timing.lapTimes.at(-1)?.time,
-      session: 'Гонка',
-      pos: 1,
-      total: 1,
+      session: S.state === 'grid' ? 'Старт' : 'Гонка',
+      pos: S.positionOf(p),
+      total: S.entries.length,
       lap: p.timing.lap,
       laps: S.laps,
+      neighbours: nb,
+      tower: S.tower(),
       keyboard: app.mode === 'keyboard',
-      cars: [{ x: car.x, z: car.z, color: '#ffb000', player: true }],
+      cars: S.entries.map((e) => ({ x: e.isPlayer ? e.car.x : e.bot.x, z: e.isPlayer ? e.car.z : e.bot.z, color: e.color, player: e.isPlayer })),
     });
   }
 

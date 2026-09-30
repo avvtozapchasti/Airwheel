@@ -660,6 +660,8 @@ function tick(now, dt) {
     errors.push(...input.errors);
   }
   const live = driving && (app.state === 'quali' ? S.state !== 'finishing' : S.state === 'race' && !S.player.finished);
+  // на решётке при горящих огнях газ = фальстарт
+  if (driving && app.state === 'race' && S.state === 'grid' && S.lights > 0 && input.gas) errors.push({ id: 'early_gas', hand: 'both' });
   if (live) {
     let aheadGap = Infinity;
     if (app.state === 'race') {

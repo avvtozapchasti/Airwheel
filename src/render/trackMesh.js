@@ -118,10 +118,10 @@ export function buildRoad(track, { wet = false, rubber = null } = {}) {
     normalMap: tex.normalMap,
     roughnessMap: tex.roughnessMap,
     vertexColors: true,
-    roughness: wet ? 0.35 : 1,
+    roughness: 1,
     metalness: 0,
-    normalScale: new THREE.Vector2(0.5, 0.5),
-    envMapIntensity: wet ? 1.6 : 0.3,
+    normalScale: new THREE.Vector2(wet ? 0.22 : 0.5, wet ? 0.22 : 0.5),
+    envMapIntensity: wet ? 1.0 : 0.3,
   });
   const mesh = new THREE.Mesh(geo.build(), mat);
   mesh.receiveShadow = true;
@@ -169,18 +169,12 @@ function buildWalls(track, kind) {
     const wd = (i) => (side > 0 ? track.wallL[i] : -track.wallR[i]);
     const base = (i) => edgeY(track, i, wd(i)) - 0.25;
     if (concrete) {
-      // внутренняя грань, верх, внешняя грань (толщина 0.5 м)
+      // бетонный блок: внутренняя грань, верх, внешняя грань (толщина 0.5 м)
       const th = 0.5 * side;
-      strip(geo, track, 0, track.n, (i) => (side > 0 ? [wd(i), wd(i)] : [wd(i), wd(i)]), {
-        y: (i, d, c) => (side > 0 ? (c === 0 ? base(i) + H + 0.25 : base(i)) : c === 0 ? base(i) : base(i) + H + 0.25),
-        u: (c) => c,
-        vLen: 6,
-      });
-      strip(geo, track, 0, track.n, (i) => (side > 0 ? [wd(i) + th, wd(i)] : [wd(i), wd(i) + th]), {
-        y: (i) => base(i) + H + 0.25,
-        u: (c) => c * 0.1,
-        vLen: 6,
-      });
+      const top = (i) => base(i) + H + 0.25;
+      strip(geo, track, 0, track.n, (i) => [wd(i), wd(i)], { y: (i, d, c) => (c === 0 ? base(i) : top(i)), u: (c) => c, vLen: 6 });
+      strip(geo, track, 0, track.n, (i) => [wd(i), wd(i) + th], { y: top, u: (c) => 0.9 + c * 0.1, vLen: 6 });
+      strip(geo, track, 0, track.n, (i) => [wd(i) + th, wd(i) + th], { y: (i, d, c) => (c === 0 ? top(i) : base(i)), u: (c) => 1 - c, vLen: 6 });
     } else {
       strip(geo, track, 0, track.n, (i) => [wd(i), wd(i)], {
         y: (i, d, c) => (c === 0 ? base(i) : base(i) + H + 0.25),
@@ -442,6 +436,70 @@ function buildGrandstands(track, defs, heightAt) {
   return group;
 }
 
+// Туннель: высокие стены, свод, световые полосы на потолке, порталы на въезде и выезде.
+// Возвращает группу; позиции светильников — в userData.lights (для настоящих точечных огней).
+function buildTunnel(track) {
+  const tu = track.def.tunnel;
+  if (!tu) return null;
+  const L = track.length, sh = track.tShift || 0;
+  const wrapT = (t) => (((t - sh) % 1) + 1) % 1;
+  const s0 = wrapT(tu.from) * L, s1 = wrapT(tu.to) * L;
+  const count = Math.round((((s1 - s0) % L) + L) % L / track.ds);
+  const i0 = track.index(s0);
+  track.tunnel = { s0, s1, length: count * track.ds };
+  const H = 6.4;
+  const group = new THREE.Group();
+  group.name = 'tunnel';
+  const wd = (i, side) => (side > 0 ? track.wallL[i] + 0.4 : -track.wallR[i] - 0.4);
+  const base = (i, side) => edgeY(track, i, wd(i, side)) - 0.2;
+  const top = (i) => track.heightAt(i, 0, 0) + H;
+  const walls = new Geo();
+  for (const side of [1, -1]) strip(walls, track, i0, count, (i) => [wd(i, side), wd(i, side)], { y: (i, d, c) => (c === 0 ? base(i, side) : top(i)), u: (c) => c * 2, vLen: 8 });
+  const ceil = new Geo();
+  strip(ceil, track, i0, count, (i) => [wd(i, 1), wd(i, -1)], { y: top, u: (c) => c, vLen: 8 });
+  const conc = TX.concrete();
+  const wallMesh = new THREE.Mesh(walls.build(), new THREE.MeshStandardMaterial({ map: conc.map, color: 0x9a9a96, roughness: 0.9, side: THREE.DoubleSide }));
+  const ceilMesh = new THREE.Mesh(ceil.build(), new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.95, side: THREE.DoubleSide }));
+  wallMesh.receiveShadow = ceilMesh.castShadow = true;
+  group.add(wallMesh, ceilMesh);
+  // световые полосы на потолке: два ряда через 9 м
+  const step = Math.max(1, Math.round(9 / track.ds));
+  const lamps = [];
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(1, 1, 1), up = new THREE.Vector3(0, 1, 0);
+  for (let k = 0; k < count; k += step) {
+    const i = track.wrap(i0 + k);
+    for (const off of [-0.3, 0.3]) {
+      const d = off * track.hw[i] * 2;
+      lamps.push({ x: track.x[i] + track.nx[i] * d, y: top(i) - 0.12, z: track.z[i] + track.nz[i] * d, h: track.heading[i], s: i * track.ds });
+    }
+  }
+  const lg = new THREE.BoxGeometry(0.5, 0.1, 3.2);
+  const lampMesh = new THREE.InstancedMesh(lg, new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 2.9, 2.3), toneMapped: false }), lamps.length);
+  lamps.forEach((l, k) => {
+    q.setFromAxisAngle(up, l.h);
+    m.compose(new THREE.Vector3(l.x, l.y, l.z), q, sc);
+    lampMesh.setMatrixAt(k, m);
+  });
+  lampMesh.computeBoundingSphere();
+  group.add(lampMesh);
+  // порталы: массивная стена над въездом и выездом
+  for (const [s, dir] of [
+    [s0, -1],
+    [s1, 1],
+  ]) {
+    const i = track.index(s);
+    const w = track.wallL[i] + track.wallR[i] + 1.4;
+    const p = track.pointAt(s, (track.wallL[i] - track.wallR[i]) / 2);
+    const portal = new THREE.Mesh(new THREE.BoxGeometry(w + 6, 5, 2.5), new THREE.MeshStandardMaterial({ map: conc.map, color: 0x8b8b86, roughness: 0.9 }));
+    portal.position.set(p.x, top(i) + 2.4, p.z);
+    portal.rotation.y = track.heading[i];
+    portal.translateZ(dir * 1.0);
+    group.add(portal);
+  }
+  group.userData.lights = lamps.filter((_, k) => k % 4 === 0).map((l) => ({ x: l.x, y: l.y - 0.4, z: l.z, s: l.s, color: 0xffe2b8, power: 1 }));
+  return group;
+}
+
 // Вся трасса целиком. env — окружение трассы, heightAt — высота рельефа.
 export function buildTrackGroup(track, env, { heightAt = null, rubber = null } = {}) {
   const group = new THREE.Group();
@@ -454,6 +512,12 @@ export function buildTrackGroup(track, env, { heightAt = null, rubber = null } =
   group.add(buildBoards(track));
   group.add(buildGrandstands(track, track.def.grandstands, heightAt));
   group.userData.setStartLights = start.userData.setLights;
+  const tunnel = buildTunnel(track);
+  group.userData.lights = [];
+  if (tunnel) {
+    group.add(tunnel);
+    group.userData.lights.push(...tunnel.userData.lights);
+  }
   return group;
 }
 

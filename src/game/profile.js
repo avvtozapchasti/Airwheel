@@ -73,7 +73,7 @@ function sampleAt(arr, n, N) {
   return out;
 }
 
-export function computeRacingLine(track, { margin = 1.5 } = {}) {
+export function computeRacingLine(track, { margin = track.def?.lineMargin ?? 1.5 } = {}) {
   // грубо (24 м) → средне (8 м) → по выборкам трассы (2 м)
   const L1 = level(track, 24, margin);
   const o1 = new Float64Array(L1.N);

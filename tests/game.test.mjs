@@ -6,6 +6,7 @@ import { computeRacingLine, speedProfile, brakingPoints, topSpeed } from '../src
 import { CARS } from '../src/game/cars.js';
 import { createCar, stepCar, STEP } from '../src/game/physics.js';
 import ALPINE from '../src/game/tracks/alpine.js';
+import STREET from '../src/game/tracks/street.js';
 import { autopilotInput } from '../src/game/autopilot.js';
 import { DriveAnalyzer } from '../src/game/analyzer.js';
 import { placeCar } from '../src/game/physics.js';
@@ -13,7 +14,7 @@ import { createBots, updateBots, collidePlayer } from '../src/game/bots.js';
 import { RaceSession } from '../src/game/session.js';
 import { QualiSession } from '../src/game/quali.js';
 
-const TRACKS = [ALPINE];
+const TRACKS = [ALPINE, STREET];
 
 let passed = 0;
 function test(name, fn) {
@@ -231,6 +232,27 @@ test('F1: ~340 км/ч, в быстрых поворотах намного бы
   const r = autopilot(tr, CARS.f1, f1, { laps: 2 });
   assert.equal(r.walls, 0);
   console.log(`    F1: круг ${r.lapTimes[1].toFixed(2)} с (GT3 идеал ${gt3.lapTime.toFixed(1)} с), тормозной путь в шпильку ${zone(hp(f1)).toFixed(0)} м против ${zone(hp(gt3)).toFixed(0)} м`);
+});
+
+test('Street Night: узкая 9–11 м с участком ~8 м, шпилька 180° и 90° под тормоз, туннель, мокрая ночь', () => {
+  const tr = build(STREET);
+  let min = Infinity, max = 0;
+  for (let i = 0; i < tr.n; i++) {
+    min = Math.min(min, tr.hw[i] * 2);
+    max = Math.max(max, tr.hw[i] * 2);
+  }
+  assert.ok(min >= 7.9 && min <= 8.5, 'самый узкий участок ' + min.toFixed(1));
+  assert.ok(max <= 11.01, 'макс. ширина ' + max.toFixed(1));
+  const prof = speedProfile(tr, tr.racingLine, CARS.gt3);
+  const bps = brakingPoints(tr, prof);
+  assert.ok(bps.some((b) => b.corner.type === 'hairpin' && b.vMin < 16), 'шпилька');
+  assert.ok(bps.filter((b) => b.corner.type === 'turn90' && b.vEntry - b.vMin > 10).length >= 3, '90° под тормоз');
+  assert.ok(STREET.tunnel && STREET.env.time === 'night' && STREET.env.wet, 'туннель, ночь, мокро');
+  // стены вплотную: вылет меньше 4 м везде
+  for (let i = 0; i < tr.n; i++) assert.ok(tr.wallL[i] - tr.hw[i] < 4 && tr.wallR[i] - tr.hw[i] < 4);
+  const r = autopilot(tr, CARS.gt3, prof, { laps: 1, pace: 0.9 });
+  assert.equal(r.lapTimes.length, 1, 'круг пройден');
+  console.log(`    ширина ${min.toFixed(1)}–${max.toFixed(1)} м, круг автопилота ${r.lapTimes[0].toFixed(1)} с (касаний стен: ${r.walls})`);
 });
 
 console.log(`\nВсе проверки игры пройдены: ${passed}`);

@@ -121,6 +121,17 @@ export function buildTerrain(track, env, grid, { cell = 10 } = {}) {
 
   const amp = T.amp ?? 20, rise = T.rise ?? 0, sc = T.scale ?? 1 / 300;
   const flat = !!T.flat;
+  // море: всё, что дальше береговой линии в направлении sea.dir, уходит под воду
+  const sea = env.sea;
+  let seaAt = () => 0;
+  if (sea) {
+    const [dx, dz] = sea.dir;
+    let maxAlong = -Infinity;
+    for (let i = 0; i < track.n; i++) maxAlong = Math.max(maxAlong, track.x[i] * dx + track.z[i] * dz);
+    const shore = maxAlong + (sea.shore ?? 30);
+    seaAt = (x, z) => smoothstep(shore, shore + 25, x * dx + z * dz);
+    sea.shoreAlong = shore;
+  }
   const near = {};
   // высота рельефа в точке
   const heightFn = (x, z) => {
@@ -146,8 +157,9 @@ export function buildTerrain(track, env, grid, { cell = 10 } = {}) {
     let h = yRoad + (smoothH - yRoad) * k - 0.06;
     if (!flat) {
       const hills = (fbm2(x * sc, z * sc) - 0.45) * amp + Math.min(T.riseMax ?? 120, rise * Math.max(0, r - wall - 60) * smoothstep(wall + 60, wall + 500, r));
-      h += hills * smoothstep(wall + 6, wall + 160, r);
+      h += hills * smoothstep(wall + 6, wall + 160, r) * (1 - seaAt(x, z));
     }
+    if (sea) h = h + ((sea.level ?? -1.5) - 3 - h) * seaAt(x, z);
     return h;
   };
 
@@ -233,5 +245,5 @@ export function buildTerrain(track, env, grid, { cell = 10 } = {}) {
     // та же диагональ, что в треугольниках
     return u + v < 1 ? a + (bb - a) * u + (c - a) * v : d + (c - d) * (1 - u) + (bb - d) * (1 - v);
   };
-  return { mesh, heightAt, bounds: { x0, z0, x1: x0 + (nx - 1) * cell, z1: z0 + (nz - 1) * cell } };
+  return { mesh, heightAt, seaAt, bounds: { x0, z0, x1: x0 + (nx - 1) * cell, z1: z0 + (nz - 1) * cell } };
 }

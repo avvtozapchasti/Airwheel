@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { rng } from '../util/rng.js';
 import { fbm2 } from './terrain.js';
+import * as TX from './textures.js';
 
 const CHUNK = 400;
 
@@ -209,8 +210,249 @@ function buildPeaks(track, cfg, fogColor) {
   return mesh;
 }
 
+// --- город ---
+// Материал зданий: окна тайлятся в мировых координатах (4 м × 3.5 м), поэтому одна текстура
+// подходит зданиям любого размера; ночью окна светятся (emissive), крыши без окон.
+function buildingMaterial(tex, night) {
+  const mat = new THREE.MeshStandardMaterial({
+    map: tex.map,
+    emissiveMap: tex.emissiveMap,
+    emissive: night ? 0xffffff : 0x000000,
+    emissiveIntensity: night ? 0.85 : 0,
+    roughness: 0.7,
+    metalness: 0.15,
+    envMapIntensity: 0.6,
+  });
+  mat.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vWinUv;\nvarying float vRoof;')
+      .replace(
+        '#include <project_vertex>',
+        `#include <project_vertex>
+        vec4 wpB = modelMatrix * instanceMatrix * vec4(transformed, 1.0);
+        vec3 wnB = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * objectNormal);
+        float horiz = abs(wnB.x) > abs(wnB.z) ? wpB.z : wpB.x;
+        vWinUv = vec2(horiz / 22.0, wpB.y / 48.0);
+        vRoof = step(0.5, wnB.y);`,
+      );
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vWinUv;\nvarying float vRoof;')
+      .replace('#include <map_fragment>', 'diffuseColor.rgb *= mix(texture2D(map, vWinUv).rgb, vec3(0.35), vRoof);')
+      .replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance *= texture2D(emissiveMap, vWinUv).rgb * (1.0 - vRoof);');
+  };
+  return mat;
+}
+
+function buildCity(track, env, grid, heightAt, seaAt, r, density) {
+  const group = new THREE.Group();
+  group.name = 'city';
+  const cfg = env.scenery.buildings;
+  const night = env.time === 'night';
+  const lights = [];
+  const box = new THREE.BoxGeometry(1, 1, 1);
+  box.translate(0, 0.5, 0);
+  const sets = [TX.windows({ lit: cfg.lit ?? 0.45, seed: 71 }), TX.windows({ lit: cfg.lit ?? 0.45, seed: 17, tint: '#bfe1ff' })].map(
+    (tex) => new ChunkedInstances('buildings', box, null, buildingMaterial(tex, night), { shadows: false }),
+  );
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
+  const up = new THREE.Vector3(0, 1, 0);
+  const col = new THREE.Color();
+  const facades = []; // для неона
+  const tu = track.tunnel;
+  const inTunnel = (sAt) => tu && (((sAt - tu.s0) % track.length) + track.length) % track.length < tu.length + 30;
+  const place = (i, side, dist, w, d, h) => {
+    const nx = track.nx[i] * side, nz = track.nz[i] * side;
+    const cx = track.x[i] + nx * (dist + d / 2), cz = track.z[i] + nz * (dist + d / 2);
+    // все углы и центр должны быть свободны (не на другой части трассы и не в море)
+    const tx = track.tx[i], tz = track.tz[i];
+    for (const [a, b] of [[0, 0], [w / 2, d / 2], [-w / 2, d / 2], [w / 2, -d / 2], [-w / 2, -d / 2]]) {
+      const x = cx + tx * a + nx * b, z = cz + tz * a + nz * b;
+      if (!grid.clear(x, z, 1.5) || seaAt(x, z) > 0.01) return null;
+    }
+    const y = heightAt(cx, cz) - 0.5;
+    q.setFromAxisAngle(up, Math.atan2(nx, nz));
+    m.compose(p.set(cx, y, cz), q, sc.set(w, h + 0.5, d));
+    const v = 0.55 + r() * 0.5;
+    const set = sets[Math.floor(r() * sets.length)];
+    set.add(m, col.setRGB(v, v * (0.95 + r() * 0.1), v * (0.95 + r() * 0.12)).clone());
+    return { cx, cz, nx, nz, w, d, h, y, heading: Math.atan2(nx, nz) };
+  };
+  // первый ряд — вдоль трассы, плотно; второй — высокие здания подальше (силуэт города)
+  const stepFront = Math.max(1, Math.round(20 / track.ds));
+  for (let i = 0; i < track.n; i += stepFront) {
+    if (inTunnel(i * track.ds)) continue;
+    for (const side of [1, -1]) {
+      if (r() > 0.85 * density + 0.1) continue;
+      const wall = side > 0 ? track.wallL[i] : track.wallR[i];
+      const w = 12 + r() * 14, d = 12 + r() * 10, h = cfg.height[0] + Math.pow(r(), 1.6) * (cfg.height[1] - cfg.height[0]) * 0.6;
+      const f = place(i, side, wall + (cfg.near ?? 3) + r() * 5, w, d, h);
+      if (f) facades.push(f);
+    }
+  }
+  const backCount = Math.round((cfg.count ?? 300) * 0.5 * density);
+  for (let k = 0; k < backCount; k++) {
+    const i = Math.floor(r() * track.n);
+    const side = r() < 0.5 ? 1 : -1;
+    const wall = side > 0 ? track.wallL[i] : track.wallR[i];
+    const h = cfg.height[0] + Math.pow(r(), 1.3) * (cfg.height[1] - cfg.height[0]) * 1.4;
+    place(i, side, wall + 30 + r() * (cfg.far ?? 150), 14 + r() * 20, 14 + r() * 20, h);
+  }
+  for (const set of sets) group.add(set.build());
+
+  // --- неон на фасадах первого ряда ---
+  const neonN = Math.min(facades.length, Math.round((env.scenery.neon?.count ?? 0) * density));
+  if (neonN > 0) {
+    const plane = new THREE.PlaneGeometry(1, 1);
+    const neon = new THREE.InstancedMesh(plane, new THREE.MeshBasicMaterial({ toneMapped: false, side: THREE.DoubleSide }), neonN);
+    const palette = [0xff2d95, 0x21e6ff, 0xb14dff, 0xff8a1f, 0x39ff88, 0xfff04d];
+    const picked = [...facades].sort(() => r() - 0.5).slice(0, neonN);
+    picked.forEach((f, k) => {
+      const w = 3 + r() * 6, h = 0.8 + r() * 1.6;
+      const y = f.y + 4 + r() * Math.min(18, f.h - 6);
+      const off = f.d / 2 + 0.08;
+      q.setFromAxisAngle(up, f.heading + Math.PI);
+      m.compose(p.set(f.cx - f.nx * off, y, f.cz - f.nz * off), q, sc.set(w, h, 1));
+      neon.setMatrixAt(k, m);
+      const c = new THREE.Color(palette[k % palette.length]).multiplyScalar(night ? 2.6 : 1.2);
+      neon.setColorAt(k, c);
+    });
+    neon.computeBoundingSphere();
+    group.add(neon);
+  }
+  return { group, lights };
+}
+
+// Фонари вдоль трассы: столб + кронштейн, светящийся плафон и «лужа света» на мокром асфальте.
+// Возвращает позиции плафонов для пула настоящих точечных огней.
+function buildLamps(track, env, heightAt, seaAt, r) {
+  const cfg = env.scenery.lamps;
+  const group = new THREE.Group();
+  group.name = 'lamps';
+  const night = env.time === 'night';
+  const step = Math.max(1, Math.round((cfg.spacing ?? 35) / track.ds));
+  const spots = [];
+  const tu = track.tunnel;
+  let side = 1;
+  for (let i = 0; i < track.n; i += step) {
+    const sAt = i * track.ds;
+    if (tu && (((sAt - tu.s0) % track.length) + track.length) % track.length < tu.length + 10) continue;
+    side = -side;
+    const both = env.scenery.promenade && Math.abs(track.kappa[i]) < 1 / 800 && r() < 0.3;
+    for (const sd of both ? [1, -1] : [side]) {
+      const wall = sd > 0 ? track.wallL[i] : track.wallR[i];
+      const d = sd * (wall + 0.7);
+      const x = track.x[i] + track.nx[i] * d, z = track.z[i] + track.nz[i] * d;
+      const y = heightAt(x, z);
+      spots.push({ i, side: sd, x, y, z, s: sAt });
+    }
+  }
+  const pole = new THREE.CylinderGeometry(0.09, 0.14, 7.6, 6);
+  pole.translate(0, 3.8, 0);
+  const arm = new THREE.BoxGeometry(0.1, 0.1, 2.3);
+  arm.translate(0, 7.5, 1.05);
+  const poleGeo = merged([tint(pole, 0x2e3238), tint(arm, 0x2e3238)]);
+  const headGeo = new THREE.BoxGeometry(0.45, 0.12, 0.85);
+  headGeo.translate(0, 7.38, 2.05);
+  const poles = new THREE.InstancedMesh(poleGeo, new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.6, roughness: 0.45 }), spots.length);
+  const heads = new THREE.InstancedMesh(headGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffd6a0).multiplyScalar(night ? 2.2 : 1.1), toneMapped: false }), spots.length);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), p = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+  const lights = [];
+  spots.forEach((sp, k) => {
+    // кронштейн смотрит на трассу
+    const ax = -track.nx[sp.i] * sp.side, az = -track.nz[sp.i] * sp.side;
+    q.setFromAxisAngle(up, Math.atan2(ax, az));
+    m.compose(p.set(sp.x, sp.y, sp.z), q, one);
+    poles.setMatrixAt(k, m);
+    heads.setMatrixAt(k, m);
+    lights.push({ x: sp.x + ax * 2.05, y: sp.y + 7.0, z: sp.z + az * 2.05, s: sp.s, color: 0xffcf96, power: 1 });
+  });
+  poles.computeBoundingSphere();
+  heads.computeBoundingSphere();
+  group.add(poles, heads);
+  // «лужи света» на асфальте: мокрое покрытие отражает фонари вытянутыми бликами
+  if (night) {
+    const plane = new THREE.PlaneGeometry(1, 1);
+    plane.rotateX(-Math.PI / 2);
+    const pools = new THREE.InstancedMesh(
+      plane,
+      new THREE.MeshBasicMaterial({
+        map: TX.glow(),
+        color: new THREE.Color(0xffc080).multiplyScalar(env.wet ? 0.32 : 0.2),
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -4,
+        toneMapped: false,
+      }),
+      lights.length,
+    );
+    const sc = new THREE.Vector3();
+    lights.forEach((l, k) => {
+      const i = track.index(l.s);
+      const q2 = new THREE.Quaternion().setFromAxisAngle(up, track.heading[i]);
+      const pr = track.project(l.x, l.z, i);
+      const y = track.heightAt(pr.i, pr.f, Math.max(-track.hw[i], Math.min(track.hw[i], pr.d))) + 0.03;
+      m.compose(p.set(l.x, y, l.z), q2, sc.set(9, 1, env.wet ? 20 : 11));
+      pools.setMatrixAt(k, m);
+    });
+    pools.computeBoundingSphere();
+    pools.renderOrder = 2;
+    group.add(pools);
+  }
+  return { group, lights };
+}
+
+// Море: большая гладкая плоскость с отражениями неба; ночью — огни яхт.
+function buildSea(track, env, r) {
+  const sea = env.sea;
+  if (!sea || sea.shoreAlong == null) return null;
+  const group = new THREE.Group();
+  group.name = 'sea';
+  const [dx, dz] = sea.dir;
+  const b = track.bounds;
+  const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
+  const along = cx * dx + cz * dz;
+  const off = sea.shoreAlong - along + 2600;
+  const night = env.time === 'night';
+  const waterN = TX.water();
+  const mat = new THREE.MeshStandardMaterial({
+    color: night ? 0x061424 : 0x1b6a86,
+    roughness: 0.12,
+    metalness: 0.1,
+    normalMap: waterN,
+    normalScale: new THREE.Vector2(0.6, 0.6),
+    envMapIntensity: night ? 1.4 : 1.1,
+  });
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(5200, 8000), mat);
+  plane.rotation.x = -Math.PI / 2;
+  plane.rotation.z = Math.atan2(dx, dz);
+  plane.position.set(cx + dx * off, sea.level ?? -1.2, cz + dz * off);
+  plane.receiveShadow = true;
+  group.add(plane);
+  group.userData.water = waterN;
+  if (night) {
+    const n = 46;
+    const g = new THREE.BoxGeometry(1, 0.6, 3);
+    const boats = new THREE.InstancedMesh(g, new THREE.MeshBasicMaterial({ toneMapped: false }), n);
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), p = new THREE.Vector3();
+    const tx = -dz, tz = dx;
+    for (let k = 0; k < n; k++) {
+      const a = 40 + r() * 700, t = (r() - 0.5) * 1800;
+      p.set(cx + dx * (sea.shoreAlong - along + a) + tx * t, (sea.level ?? -1.2) + 0.6, cz + dz * (sea.shoreAlong - along + a) + tz * t);
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), r() * 6.28);
+      m.compose(p, q, one);
+      boats.setMatrixAt(k, m);
+      boats.setColorAt(k, new THREE.Color(r() < 0.7 ? 0xffe2b0 : 0xff5060).multiplyScalar(2.5));
+    }
+    boats.computeBoundingSphere();
+    group.add(boats);
+  }
+  return group;
+}
+
 // Построить окружение трассы. Возвращает { group, update(camPos), setShadows(on) }.
-export function buildScenery(track, env, grid, heightAt, { density = 1 } = {}) {
+export function buildScenery(track, env, grid, heightAt, { density = 1, seaAt = () => 0 } = {}) {
   const group = new THREE.Group();
   group.name = 'scenery';
   const sc = env.scenery || {};
@@ -233,7 +475,7 @@ export function buildScenery(track, env, grid, heightAt, { density = 1 } = {}) {
     const col = new THREE.Color();
     for (let k = 0; k < count; k++) {
       const pt = sampleOutside(track, grid, r, cfg.near ?? 6, cfg.far ?? 300, 2.5);
-      if (!pt) continue;
+      if (!pt || seaAt(pt.x, pt.z) > 0.01) continue;
       const y = heightAt(pt.x, pt.z);
       const scale = (cfg.scale ?? 1) * (0.7 + r() * 0.7);
       q.setFromAxisAngle(up, r() * Math.PI * 2);
@@ -265,10 +507,27 @@ export function buildScenery(track, env, grid, heightAt, { density = 1 } = {}) {
 
   if (sc.peaks) group.add(buildPeaks(track, sc.peaks, env.fog?.color ?? 0xbfd2e2));
 
+  // город, фонари, море
+  const lights = [];
+  if (sc.buildings) group.add(buildCity(track, env, grid, heightAt, seaAt, r, density).group);
+  if (sc.lamps) {
+    const L = buildLamps(track, env, heightAt, seaAt, r);
+    group.add(L.group);
+    lights.push(...L.lights);
+  }
+  const seaGroup = buildSea(track, env, r);
+  if (seaGroup) group.add(seaGroup);
+  const water = seaGroup?.userData.water;
+
   return {
     group,
-    update(camPos, lodScale = 1) {
+    lights,
+    update(camPos, lodScale = 1, dt = 0) {
       for (const l of lods) l.update(camPos, lodScale);
+      if (water) {
+        water.offset.x += dt * 0.004;
+        water.offset.y += dt * 0.006;
+      }
     },
     setShadows(on) {
       for (const l of lods) l.setShadows(on);

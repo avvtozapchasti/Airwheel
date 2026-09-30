@@ -149,7 +149,7 @@ export class Track {
   // Повороты из данных: вершина — максимум |κ| рядом с подсказкой t,
   // вход/выход — где кривизна падает до четверти от вершинной.
   findCorners(hints) {
-    const win = Math.round((0.035 * this.length) / this.ds);
+    const win = Math.round(Math.min(0.035 * this.length, 45) / this.ds);
     return hints.map((h) => {
       const c0 = Math.round(h.t * this.n);
       let apex = c0, best = 0;

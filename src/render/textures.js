@@ -394,6 +394,17 @@ export function crowd() {
   });
 }
 
+// Нормали воды: мелкая рябь (тайлится).
+export function water() {
+  return cached('water', () => {
+    const S = 256;
+    const h = fbm(S, 8, 5, 101);
+    const t = toTexture(normalFromHeight(h, S, 5), { srgb: false });
+    t.repeat.set(160, 160);
+    return t;
+  });
+}
+
 export function disposeAll() {
   for (const v of cache.values()) {
     if (v?.isTexture) v.dispose();

@@ -14,7 +14,7 @@ import { Podium } from './render/podium.js';
 import { Track } from './game/track.js';
 import { computeRacingLine, speedProfile, brakingPoints } from './game/profile.js';
 import { CARS, CLASS_IDS } from './game/cars.js';
-import { tryBoost, STEP, KMH, speedOf } from './game/physics.js';
+import { tryBoost, STEP, KMH, speedOf, placeCar } from './game/physics.js';
 import { RaceSession } from './game/session.js';
 import { QualiSession } from './game/quali.js';
 import { createBots } from './game/bots.js';
@@ -134,6 +134,7 @@ function setClass(clsId) {
   }
   game.model = buildCarModel(game.spec, { color: 0xffb000, player: true });
   gfx.scene.add(game.model.root);
+  world.attachHeadlight(game.model);
 }
 
 function prepare() {
@@ -661,7 +662,13 @@ function tick(now, dt) {
       gfx.followSun(gfx.camera.position);
     }
     for (const m of game.botModels) if (m.root.parent) m.update(m.bot, alpha);
-    world.update(gfx.camera.position);
+    const showCars = driving || app.state === 'paused';
+    world.update(gfx.camera.position, {
+      dt,
+      focus: car && showCars ? car : { s: game.track.project(gfx.camera.position.x, gfx.camera.position.z, -1).s },
+      bots: app.state === 'race' || (app.state === 'paused' && app.pausedFrom === 'race') ? game.bots : null,
+    });
+    gfx.setSpeedBlur(car && showCars ? Math.max(0, (speedOf(car) / game.spec.vmax - 0.55) * 1.6) : 0);
     gfx.render();
   }
 
@@ -790,7 +797,7 @@ window.addEventListener('unhandledrejection', (e) => {
   e.preventDefault();
 });
 
-window.airwheel = { app, game, gfx, world, rig, keyboard, hud, settings, formatTime };
+window.airwheel = { app, game, gfx, world, rig, keyboard, hud, settings, formatTime, placeCar };
 
 function boot() {
   app.trackerReady = tracker.init();

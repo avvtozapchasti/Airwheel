@@ -1,21 +1,19 @@
 import './style.css';
+import * as THREE from 'three';
 import { Camera, cameraErrorText } from './vision/camera.js';
 import { HandTracker } from './vision/hands.js';
 import { GestureController } from './control/gestures.js';
 import { Wheel } from './control/wheel.js';
 import { Coach } from './control/coach.js';
 import { KeyboardControl } from './control/keyboard.js';
+import { Graphics, hasWebGL2 } from './render/scene.js';
+import { CameraRig } from './render/cameras.js';
+import { buildRoad } from './render/trackMesh.js';
+import * as TX from './render/textures.js';
 import { Track } from './game/track.js';
-import { Renderer } from './game/renderer.js';
-import { createPlayer, stepPlayer, tryNitro, STEP, KMH, MAX_SPEED } from './game/physics.js';
-import { drawHud } from './game/hud.js';
-import { createBots, updateBots, checkCollisions, racePosition } from './game/bots.js';
-import { AudioEngine } from './game/audio.js';
-import { Effects } from './game/effects.js';
-import { showResults } from './ui/results.js';
+import TEST_TRACK from './game/tracks/test.js';
 import { drawPreview } from './ui/preview.js';
 import { Onboarding } from './ui/onboarding.js';
-import { qualifies, addRecord, recordsTable, lastName } from './ui/leaderboard.js';
 
 const $ = (id) => document.getElementById(id);
 const video = $('video');
@@ -32,67 +30,84 @@ const wheel = new Wheel();
 const gestures = new GestureController(wheel);
 const keyboard = new KeyboardControl();
 const coach = new Coach();
-const track = new Track();
-const renderer = new Renderer($('game'));
-const audio = new AudioEngine();
-const fx = new Effects();
 
 const app = {
   mode: 'gesture', // 'gesture' | 'keyboard'
-  state: 'onboarding', // onboarding | countdown | race | paused | finished | results
+  state: 'onboarding', // onboarding | demo | paused
   hands: [],
   input: null,
-  player: createPlayer(),
-  bots: createBots(),
-  raceTime: 0,
-  place: 1,
   lastFrame: performance.now(),
-  acc: 0,
-  countdown: -1,
-  lastBeep: 4,
-  finishTimer: 0,
-  hint: null,
-  lostT: 0, // сколько не видно обеих рук
+  lostT: 0,
   brightnessT: 0,
   trackerReady: null,
-  // производительность
   lastVideoTime: -1,
   fps: 60,
   fpsFrames: 0,
   fpsT: 0,
-  slowSec: 0,
-  perfLevel: 0, // 0 — полное качество; дальше: 640×480 → меньше пикселей canvas → детект через кадр
-  frameNo: 0,
+  demoS: 0,
 };
 
-const IDLE = { steer: 0, gas: false, brake: false, nitro: false };
+// ---------- 3D ----------
+if (!hasWebGL2()) {
+  document.body.innerHTML = `
+    <div class="screen"><div class="card">
+      <h1>Нужен WebGL2</h1>
+      <p class="lead">Браузер не поддерживает WebGL2, без него 3D-гонка не запустится.</p>
+      <p>Обнови браузер (Chrome, Edge, Firefox, Safari 15+) или включи аппаратное ускорение в настройках.</p>
+      <div class="row"><button class="btn primary" onclick="location.reload()">Перезагрузить</button></div>
+    </div></div>`;
+  throw new Error('WebGL2 недоступен');
+}
+
+const gfx = new Graphics($('game'));
+const rig = new CameraRig(gfx.camera);
+const world = { track: null, group: null };
+
+function loadTrack(def) {
+  const track = new Track(def);
+  const group = new THREE.Group();
+  group.add(buildRoad(track));
+  // временная земля под тестовой дорогой
+  const g = TX.grass();
+  g.map.repeat.set(200, 200);
+  g.normalMap.repeat.set(200, 200);
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(6000, 6000),
+    new THREE.MeshStandardMaterial({ map: g.map, normalMap: g.normalMap, roughness: 0.95 }),
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = track.bounds.minY - 0.4;
+  ground.receiveShadow = true;
+  group.add(ground);
+  gfx.scene.add(group);
+  gfx.setEnvironment(def.env || {});
+  world.track = track;
+  world.group = group;
+}
+
+loadTrack(TEST_TRACK);
 
 // ---------- онбординг ----------
 const onboarding = new Onboarding(screenEl, {
   onEnableCamera: enableCamera,
   onKeyboard: () => {
-    audio.init();
     setMode('keyboard');
     onboarding.show('start', { keyboard: true });
   },
   onRetryCamera: () => onboarding.show('camera'),
   onCalibrate: () => wheel.startCalibration(),
   onStart: () => {
-    audio.init();
     onboarding.hide();
-    newRace();
+    app.state = 'demo';
   },
-  onTick: () => audio.ok(),
 });
 
 async function enableCamera() {
-  audio.init();
   try {
     camStatus.textContent = 'Загружаю модель рук…';
     await app.trackerReady;
     camStatus.textContent = 'Запрашиваю камеру…';
     await camera.start(1280, 720);
-    // Игрок мог уйти в клавиатурный режим, пока камера включалась, — не перебиваем его выбор.
     if (onboarding.step === 'camera') setMode('gesture');
     camStatus.textContent = `Камера ${camera.width}×${camera.height} · ${tracker.delegate}`;
     return null;
@@ -100,7 +115,6 @@ async function enableCamera() {
     console.warn(e);
     const msg = e?.name ? cameraErrorText(e) : 'Не удалось загрузить распознавание рук. Играй с клавиатуры.';
     camStatus.textContent = 'Камера недоступна';
-    // Автоматически переключаемся на клавиатуру.
     setMode('keyboard');
     onboarding.show('start', { keyboard: true, error: msg });
     return msg;
@@ -115,155 +129,28 @@ function setMode(mode) {
   else if (camera.ready) camStatus.textContent = `Камера ${camera.width}×${camera.height} · ${tracker.delegate}`;
 }
 
-// ---------- гонка ----------
-function newRace() {
-  app.player = createPlayer();
-  app.bots = createBots();
-  app.raceTime = 0;
-  app.acc = 0;
-  app.countdown = 3;
-  app.lastBeep = 4;
-  app.state = 'countdown';
-  app.lostT = 0;
-  fx.reset();
-  screenEl.classList.add('hidden');
-  coach.reset();
-  if (app.mode === 'gesture') coach.startRecording();
-}
-
-// Пауза: вручную (Esc/P/кнопка) или автоматически, когда пропали обе руки.
-function pause(reason) {
-  if (app.state !== 'race' && app.state !== 'countdown') return;
-  app.pausedFrom = app.state;
-  app.state = 'paused';
-  const how =
-    app.mode === 'gesture'
-      ? 'Подними обе открытые ладони к камере на 1 секунду, чтобы продолжить.'
-      : 'Нажми Enter или пробел, чтобы продолжить.';
-  screenEl.innerHTML = `
-    <div class="card">
-      <h1>⏸ Пауза</h1>
-      <p class="lead" id="pause-hint">${reason || ''}</p>
-      <p>${how}</p>
-      <div class="row">
-        <button class="btn primary" id="btn-resume">Продолжить</button>
-        <button class="btn" id="btn-restart">Заново</button>
-      </div>
-    </div>`;
-  screenEl.classList.remove('hidden');
-  $('btn-resume').onclick = resume;
-  $('btn-restart').onclick = newRace;
-}
-
-function resume() {
-  if (app.state !== 'paused') return;
-  app.state = app.pausedFrom || 'race';
-  app.lostT = 0;
-  screenEl.classList.add('hidden');
-}
-
-function finishRace() {
-  app.state = 'results';
-  coach.stopRecording();
-  const p = app.player;
-  const canSave = qualifies(p.totalTime);
-  const extra = `
-    <h2>Рекорды</h2>
-    ${
-      canSave
-        ? `<p class="lead">Новый рекорд! Впиши имя:</p>
-           <div class="name-row"><input id="rec-name" maxlength="16" placeholder="Твоё имя" value="${lastName().replace(/"/g, '')}" />
-           <button class="btn primary" id="rec-save">Сохранить</button></div>`
-        : ''
-    }
-    <div id="rec-table">${recordsTable()}</div>
-    ${app.mode === 'gesture' ? '<p>Подними обе ладони на 1 секунду — и сразу новый заезд.</p>' : ''}`;
-  showResults(
-    screenEl,
-    {
-      place: app.place,
-      total: app.bots.length + 1,
-      time: p.totalTime,
-      bestLap: p.bestLap,
-      lapTimes: p.lapTimes,
-      coach: coach.summary(),
-      keyboard: app.mode === 'keyboard',
-    },
-    {
-      onRetry: newRace,
-      onRecalibrate: app.mode === 'gesture' ? () => startOnboarding('calibrate') : null,
-      extra,
-    },
-  );
-  if (canSave) {
-    const save = () => {
-      const idx = addRecord($('rec-name').value, p.totalTime, { place: app.place, mode: app.mode });
-      $('rec-table').innerHTML = recordsTable(idx);
-      $('rec-save').closest('.name-row').remove();
-    };
-    $('rec-save').onclick = save;
-    $('rec-name').onkeydown = (e) => e.key === 'Enter' && save();
-  }
-}
-
-function startOnboarding(step) {
-  app.state = 'onboarding';
-  onboarding.show(step, { keyboard: app.mode === 'keyboard' });
-}
-
-// Один шаг симуляции с фиксированным dt.
-function simulate(input, dt) {
-  const p = app.player;
-  if (app.state === 'countdown') {
-    app.countdown -= dt;
-    const n = Math.ceil(app.countdown);
-    if (n < app.lastBeep) {
-      app.lastBeep = n;
-      audio.countdownBeep(n <= 0);
-    }
-    if (app.countdown <= 0) app.state = 'race';
-    stepPlayer(p, IDLE, dt, track, false);
-    return;
-  }
-  if (app.state === 'race' || app.state === 'finished') {
-    app.countdown -= dt; // «ВПЕРЁД!» ещё немного висит после старта
-    app.raceTime += dt;
-    const events = stepPlayer(p, input, dt, track);
-    updateBots(app.bots, p, track, dt, app.raceTime);
-    if (checkCollisions(p, app.bots, track)) audio.crash();
-    if (events.includes('lap')) audio.lap();
-    if (events.includes('crash')) audio.crash();
-    if (events.includes('finish')) {
-      app.place = racePosition(p, app.bots);
-      app.state = 'finished';
-      app.finishTimer = 2.5;
-      audio.finish();
-    }
-    if (app.state === 'finished') {
-      app.finishTimer -= dt;
-      if (app.finishTimer <= 0) finishRace();
-    }
-    fx.update(dt, p);
-    return;
-  }
-  if (app.state === 'paused') return;
-  // онбординг и итоги: машина стоит/докатывается
-  stepPlayer(p, IDLE, dt, track, false);
-  fx.update(dt, p);
-}
-
 function readInput(now, dt) {
   if (app.mode === 'keyboard') return keyboard.update(dt);
-  app.frameNo++;
-  // Инференс только на новом кадре камеры (экран может быть 120 Гц, а камера — 30 к/с).
-  const skip = app.perfLevel >= 3 && app.frameNo % 2 === 1;
-  if (camera.ready && video.currentTime !== app.lastVideoTime && !skip) {
+  if (camera.ready && video.currentTime !== app.lastVideoTime) {
     app.lastVideoTime = video.currentTime;
     const res = tracker.detect(video, now);
     if (res) app.hands = res;
   }
   gestures.aspect = camera.width / camera.height || 4 / 3;
   return gestures.update(app.hands, now);
+}
+
+// Облёт тестовой трассы: точка едет по центру, камера — следом.
+const demoTarget = { pos: new THREE.Vector3(), heading: 0, speed: 38, vmax: 78, dims: { length: 4.6 } };
+function updateDemo(dt) {
+  const tr = world.track;
+  app.demoS = tr.wrapS(app.demoS + demoTarget.speed * dt);
+  const p = tr.pointAt(app.demoS, 0);
+  demoTarget.pos.set(p.x, p.y + 0.5, p.z);
+  demoTarget.heading = tr.headingAt(app.demoS);
+  demoTarget.s = app.demoS;
+  rig.update(dt, demoTarget, tr);
+  gfx.followSun(demoTarget.pos);
 }
 
 function frame(now) {
@@ -273,98 +160,40 @@ function frame(now) {
   try {
     tick(now, dt);
   } catch (e) {
-    // Не даём одной ошибке остановить игровой цикл.
     console.error(e);
   }
 }
 
-// Если FPS держится ниже 24, по шагам снижаем нагрузку.
-function monitorFps(dt) {
+function tick(now, dt) {
   app.fpsFrames++;
   app.fpsT += dt;
-  if (app.fpsT < 1) return;
-  app.fps = app.fpsFrames / app.fpsT;
-  app.fpsFrames = 0;
-  app.fpsT = 0;
-  if (document.hidden) return;
-  app.slowSec = app.fps < 24 ? app.slowSec + 1 : 0;
-  if (app.slowSec >= 2 && app.perfLevel < 3) {
-    app.slowSec = 0;
-    app.perfLevel++;
-    if (app.perfLevel === 1 && camera.ready) camera.downgrade(640, 480);
-    if (app.perfLevel === 2) renderer.setQuality(0.7);
-    console.info(`[airwheel] FPS ${app.fps.toFixed(0)}, уровень оптимизации ${app.perfLevel}`);
+  if (app.fpsT >= 1) {
+    app.fps = app.fpsFrames / app.fpsT;
+    app.fpsFrames = 0;
+    app.fpsT = 0;
   }
-}
-
-function tick(now, dt) {
-  monitorFps(dt);
   const input = (app.input = readInput(now, dt));
-  const p = app.player;
-
-  if (input.nitro && app.state === 'race' && tryNitro(p)) audio.nitro();
-  const typing = document.activeElement instanceof HTMLInputElement;
-  const startPressed = input.startTrigger || (!typing && keyboard.has('Enter', 'Space'));
-  if (app.state === 'paused' && startPressed) resume();
-  else if (app.state === 'results' && input.startTrigger) newRace();
-  else if (app.state === 'onboarding' && onboarding.step === 'start' && !typing && keyboard.has('Enter')) onboarding.h.onStart();
 
   if (app.mode === 'gesture' && camera.ready) {
-    // яркость кадра — раз в секунду
     app.brightnessT -= dt;
     if (app.brightnessT <= 0) {
       app.brightnessT = 1;
       const b = camera.measureBrightness();
       if (b !== null) gestures.brightness = b;
     }
-    // режим «Ошибка»: одна главная подсказка
-    const straight = track.curveAhead(p.z, 20) < 0.5;
-    app.hint = coach.update(input.errors, now / 1000, { straight });
-    // обе руки пропали во время гонки — пауза с подсказкой
-    app.lostT = input.handsVisible === 0 ? app.lostT + dt : 0;
-    if (app.state === 'race' && app.lostT > 0.4) {
-      pause('Руки пропали из кадра. Верни обе руки в центр кадра, на уровень груди.');
-    }
-  } else {
-    app.hint = null;
-  }
+    app.hint = coach.update(input.errors, now / 1000, { straight: true });
+  } else app.hint = null;
 
   if (app.state === 'onboarding') {
     onboarding.update(input, dt, { brightness: camera.ready ? gestures.brightness : null, hint: app.hint });
   }
-
-  const showHint = app.hint && ['countdown', 'race'].includes(app.state);
+  const showHint = app.hint && app.state === 'demo';
   if (showHint && coachEl.textContent !== app.hint.text) coachEl.textContent = app.hint.text;
   coachEl.classList.toggle('show', !!showHint);
-  if (app.state === 'paused' && app.hint) {
-    const el = $('pause-hint');
-    if (el && el.textContent !== app.hint.text) el.textContent = app.hint.text;
-  }
 
-  // игровой цикл с фиксированным шагом, независимо от частоты кадров
-  app.acc += dt;
-  let steps = 0;
-  while (app.acc >= STEP && steps < 6) {
-    simulate(input, STEP);
-    app.acc -= STEP;
-    steps++;
-  }
-  if (steps === 6) app.acc = 0;
+  if (app.state !== 'paused') updateDemo(dt);
+  gfx.render();
 
-  const racing = ['countdown', 'race', 'finished'].includes(app.state);
-  audio.update(p.speed / MAX_SPEED, p.braking, p.nitroT > 0, racing);
-
-  renderer.render({ track, player: p, bots: app.bots, shake: p.shake, fx });
-  if (racing || app.state === 'paused') {
-    drawHud(renderer.ctx, renderer.width, renderer.height, {
-      player: p,
-      input,
-      position: p.finished ? app.place : racePosition(p, app.bots),
-      total: app.bots.length + 1,
-      keyboard: app.mode === 'keyboard',
-      countdown: app.countdown > -0.8 ? app.countdown : null,
-    });
-  }
   drawPreview(camCanvas, camCtx, {
     video,
     cameraReady: camera.ready && app.mode === 'gesture',
@@ -375,77 +204,36 @@ function tick(now, dt) {
   });
 
   if (!debugEl.classList.contains('hidden')) {
-    const f = (v) => (v == null ? '—' : v.toFixed(2));
+    const info = gfx.renderer.info.render;
     debugEl.textContent =
-      `режим: ${app.mode}  состояние: ${app.state}  FPS: ${app.fps.toFixed(0)}  опт: ${app.perfLevel}\n` +
-      `скорость: ${Math.round(p.speed * KMH)} км/ч  x: ${p.x.toFixed(2)}\n` +
-      `steer: ${input.steer.toFixed(2)}  газ: ${input.gas}  тормоз: ${input.brake}\n` +
-      `fist L: ${f(input.scoreL)}  R: ${f(input.scoreR)}  угол: ${f(input.relDeg)}°\n` +
-      `ошибки: ${(input.errors || []).map((e) => e.id + (e.hand ? ':' + e.hand : '')).join(', ')}\n` +
-      `подсказка: ${app.hint ? app.hint.id : '—'}  яркость: ${Math.round(gestures.brightness)}`;
+      `режим: ${app.mode}  состояние: ${app.state}  FPS: ${app.fps.toFixed(0)}\n` +
+      `draw calls: ${info.calls}  треугольников: ${info.triangles}\n` +
+      `steer: ${input.steer.toFixed(2)}  газ: ${input.gas}  тормоз: ${input.brake}`;
   }
 }
 
 // ---------- кнопки и клавиши ----------
-function toggleMute() {
-  audio.init();
-  audio.setMuted(!audio.muted);
-  $('btn-mute').textContent = audio.muted ? '🔇' : '🔊';
-}
-
 function toggleKeyboard() {
   if (app.mode === 'keyboard') {
     if (camera.ready) setMode('gesture');
-    else if (app.state === 'onboarding' || app.state === 'results') startOnboarding('camera');
+    else if (app.state === 'onboarding') onboarding.show('camera');
   } else {
     setMode('keyboard');
     if (app.state === 'onboarding') onboarding.show('start', { keyboard: true });
   }
 }
 
-$('btn-mute').textContent = audio.muted ? '🔇' : '🔊';
-$('btn-mute').onclick = toggleMute;
 $('btn-kb').onclick = toggleKeyboard;
-$('btn-pause').onclick = () => (app.state === 'paused' ? resume() : pause());
-
-// Тач-кнопки: те же флаги, что и клавиатура.
-document.querySelectorAll('#touch button').forEach((btn) => {
-  const k = btn.dataset.k;
-  const set = (on) => (e) => {
-    e.preventDefault();
-    btn.classList.toggle('active', on);
-    if (k === 'nitro') {
-      if (on) keyboard.queueNitro();
-    } else keyboard.touch[k] = on;
-    if (on) audio.init();
-  };
-  btn.addEventListener('pointerdown', set(true));
-  btn.addEventListener('pointerup', set(false));
-  btn.addEventListener('pointercancel', set(false));
-  btn.addEventListener('pointerleave', set(false));
-});
-
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement) return;
   if (e.code === 'KeyK') toggleKeyboard();
-  if (e.code === 'KeyM') toggleMute();
-  if (e.code === 'Backquote') debugEl.classList.toggle('hidden'); // отладочная панель
-  if (e.code === 'Escape' || e.code === 'KeyP') {
-    if (app.state === 'paused') resume();
-    else pause();
-  }
+  if (e.code === 'KeyC') rig.next();
+  if (e.code === 'Backquote') debugEl.classList.toggle('hidden');
 });
 
-// Вкладка скрыта — ставим паузу, чтобы не проиграть гонку вслепую.
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) pause('Игра на паузе, пока вкладка скрыта.');
-});
-
-// Доступ из консоли для отладки и проверки жюри.
-window.airwheel = app;
+window.airwheel = { app, gfx, world };
 
 function boot() {
-  // Модель рук начинаем грузить сразу, пока игрок читает первый экран.
   app.trackerReady = tracker.init();
   app.trackerReady.catch((e) => console.warn('Модель рук не загрузилась', e));
   onboarding.show('camera');

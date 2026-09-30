@@ -1,5 +1,5 @@
 // Таблица рекордов в localStorage: топ-5 по времени заезда.
-import { formatTime } from '../game/hud.js';
+import { formatTime } from '../util/format.js';
 import { esc } from './results.js';
 
 const KEY = 'airwheel.records';

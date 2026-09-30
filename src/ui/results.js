@@ -1,5 +1,5 @@
 // Экран итогов заезда: место, время, круги, ошибки по типам и главная ошибка с советом.
-import { formatTime } from '../game/hud.js';
+import { formatTime } from '../util/format.js';
 
 export const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);

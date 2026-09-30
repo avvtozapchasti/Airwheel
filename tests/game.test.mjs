@@ -11,6 +11,7 @@ import { DriveAnalyzer } from '../src/game/analyzer.js';
 import { placeCar } from '../src/game/physics.js';
 import { createBots, updateBots, collidePlayer } from '../src/game/bots.js';
 import { RaceSession } from '../src/game/session.js';
+import { QualiSession } from '../src/game/quali.js';
 
 const TRACKS = [ALPINE];
 
@@ -175,6 +176,35 @@ test('гонка: игрок на автопилоте + 11 ботов, решё
   assert.deepEqual(rows.slice(0, 3).map((r) => r.points), [25, 18, 15]);
   for (let k = 1; k < rows.length; k++) assert.ok(rows[k].time >= rows[k - 1].time, 'протокол по времени');
   console.log(`    игрок: P${rows.find((r) => r.player).pos}, победитель ${rows[0].name} ${rows[0].time.toFixed(2)} с`);
+});
+
+test('квалификация: разгон, 2 попытки, протокол 12 машин; срезка аннулирует круг', () => {
+  const tr = build(ALPINE);
+  const spec = CARS.gt3;
+  const prof = speedProfile(tr, tr.racingLine, spec);
+  const bots = createBots(11, spec, tr, { seed: 3 });
+  const events = [];
+  const Q = new QualiSession({ track: tr, spec, prof, bots, onEvent: (e) => events.push(e.type) });
+  Q.start();
+  let guard = 0, cut = false;
+  while (Q.state !== 'done' && guard++ < 120 * 240) {
+    let input = autopilotInput(Q.playerCar, tr, prof, spec, { pace: 0.92 });
+    // во второй попытке срезаем: уводим машину на траву
+    if (Q.attempt === 2 && Q.lapTimeOf() > 20 && Q.lapTimeOf() < 24) {
+      input = { ...input, steer: 1 };
+      cut = true;
+    }
+    Q.step(STEP, input);
+  }
+  assert.equal(Q.state, 'done');
+  assert.equal(events.filter((e) => e === 'attempt').length, 2);
+  assert.ok(cut && events.includes('invalid'), 'срезка аннулирует круг');
+  const rows = Q.results();
+  assert.equal(rows.length, 12);
+  const me = rows.find((r) => r.player);
+  assert.ok(me.time > 0, 'время игрока засчитано по первой попытке');
+  for (const b of bots) assert.ok(Math.abs(b.qualiTime / b.prof.lapTime - 1) <= 0.0151, 'разброс ±1.5%');
+  console.log(`    квала: игрок P${me.pos} ${me.time.toFixed(2)} с, поул ${rows[0].time.toFixed(2)} с`);
 });
 
 console.log(`\nВсе проверки игры пройдены: ${passed}`);

@@ -123,7 +123,7 @@ export class Graphics {
     this.camera.updateProjectionMatrix();
   }
 
-  render() {
-    this.renderer.render(this.scene, this.camera);
+  render(scene = this.scene, camera = this.camera) {
+    this.renderer.render(scene, camera);
   }
 }

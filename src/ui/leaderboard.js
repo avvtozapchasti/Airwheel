@@ -1,59 +1,81 @@
-// Таблица рекордов в localStorage: топ-5 по времени заезда.
-import { formatTime } from '../util/format.js';
-import { esc } from './results.js';
+// Рекорды и настройки в localStorage: лучший круг, лучшая квалификация и лучший финиш
+// для каждой пары «трасса + класс». Если хранилище недоступно (приватный режим) — просто не сохраняем.
+import { formatLap } from '../util/format.js';
 
-const KEY = 'airwheel.records';
-const NAME_KEY = 'airwheel.name';
-export const TOP_N = 5;
+const KEY = 'airwheel.v2.records';
+const SETTINGS_KEY = 'airwheel.v2.settings';
 
-export function loadRecords() {
+function load(key, fallback) {
   try {
-    const list = JSON.parse(localStorage.getItem(KEY) || '[]');
-    return Array.isArray(list) ? list.filter((r) => r && typeof r.time === 'number').slice(0, TOP_N) : [];
+    const v = JSON.parse(localStorage.getItem(key) || 'null');
+    return v && typeof v === 'object' ? v : fallback;
   } catch {
-    return [];
+    return fallback;
   }
 }
 
-export function qualifies(time) {
-  const list = loadRecords();
-  return list.length < TOP_N || time < list[list.length - 1].time;
-}
-
-// Возвращает индекс новой записи в таблице (или -1).
-export function addRecord(name, time, extra = {}) {
-  const list = loadRecords();
-  const rec = { name: String(name).trim().slice(0, 16) || 'Игрок', time, date: Date.now(), ...extra };
-  list.push(rec);
-  list.sort((a, b) => a.time - b.time);
-  const top = list.slice(0, TOP_N);
+function save(key, v) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(top));
-    localStorage.setItem(NAME_KEY, rec.name);
+    localStorage.setItem(key, JSON.stringify(v));
   } catch {
-    /* localStorage недоступен — просто не сохраняем */
-  }
-  return top.indexOf(rec);
-}
-
-export function lastName() {
-  try {
-    return localStorage.getItem(NAME_KEY) || '';
-  } catch {
-    return '';
+    /* хранилище недоступно */
   }
 }
 
-export function recordsTable(highlight = -1) {
-  const list = loadRecords();
-  if (!list.length) return '<p>Рекордов пока нет — стань первым!</p>';
-  const rows = list
-    .map(
-      (r, i) =>
-        `<tr class="${i === highlight ? 'me' : ''}"><td>${i + 1}</td><td>${esc(r.name)}</td><td>${
-          r.mode === 'keyboard' ? '⌨️' : '🖐'
-        }</td><td>${formatTime(r.time)}</td></tr>`,
-    )
+export function getRecord(trackId, cls) {
+  return load(KEY, {})[`${trackId}/${cls}`] || null;
+}
+
+// Обновить рекорд. Возвращает список того, что улучшено: ['lap', 'quali', 'finish'].
+export function saveRecord(trackId, cls, { lap = null, quali = null, finish = null, time = null, laps = null } = {}) {
+  const all = load(KEY, {});
+  const k = `${trackId}/${cls}`;
+  const r = all[k] || {};
+  const improved = [];
+  if (lap && (!r.lap || lap < r.lap)) {
+    r.lap = lap;
+    improved.push('lap');
+  }
+  if (quali && (!r.quali || quali < r.quali)) {
+    r.quali = quali;
+    improved.push('quali');
+  }
+  if (finish && (!r.finish || finish < r.finish || (finish === r.finish && time && laps === r.laps && time < r.time))) {
+    r.finish = finish;
+    r.time = time;
+    r.laps = laps;
+    improved.push('finish');
+  }
+  r.date = Date.now();
+  all[k] = r;
+  save(KEY, all);
+  return improved;
+}
+
+export function recordLine(trackId, cls) {
+  const r = getRecord(trackId, cls);
+  if (!r) return 'рекордов пока нет';
+  const parts = [];
+  if (r.lap) parts.push(`круг ${formatLap(r.lap)}`);
+  if (r.finish) parts.push(`финиш P${r.finish}`);
+  return parts.join(' · ') || 'рекордов пока нет';
+}
+
+export function loadSettings(defaults) {
+  return { ...defaults, ...load(SETTINGS_KEY, {}) };
+}
+
+export function saveSettings(s) {
+  save(SETTINGS_KEY, s);
+}
+
+// Короткая таблица рекордов по всем трассам (для онбординга).
+export function recordsTable() {
+  const all = load(KEY, {});
+  const rows = Object.entries(all)
+    .filter(([, r]) => r.lap)
+    .slice(0, 6)
+    .map(([k, r]) => `<tr><td>${k.replace('/', ' · ').toUpperCase()}</td><td>${formatLap(r.lap)}</td></tr>`)
     .join('');
-  return `<table class="records">${rows}</table>`;
+  return rows ? `<table class="records">${rows}</table>` : '<p>Рекордов пока нет — стань первым!</p>';
 }

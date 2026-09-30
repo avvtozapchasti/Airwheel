@@ -118,6 +118,13 @@ export class Onboarding {
       $('#ob-skip').onclick = () => this.show('start');
     }
 
+    // Шаг 4 — меню уик-энда (выбор трассы, класса, кругов), если оно подключено.
+    if (step === 'start' && this.h.onMenu) {
+      this.step = null;
+      this.h.onMenu(opts);
+      return;
+    }
+
     if (step === 'start') {
       const kb = !!opts.keyboard;
       this.render(`

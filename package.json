@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "postinstall": "node scripts/copy-wasm.js",
-    "test": "node tests/coach.test.mjs"
+    "test": "node tests/coach.test.mjs && node tests/game.test.mjs"
   },
   "devDependencies": {
     "vite": "^8.3.1"

@@ -419,3 +419,20 @@ html, body {
   .screen.podium-mode { justify-content: center; background: rgba(8, 12, 24, 0.6); }
   .screen.podium-mode .card { width: 100%; }
 }
+
+/* ---------- телефон: тач-режим ---------- */
+@media (pointer: coarse) {
+  body.kb-mode .hud-dash { bottom: 108px; width: 250px; height: 110px; }
+  body.kb-mode .hud-tower { display: none; }
+  .topbar .icon-btn { width: 42px; height: 42px; font-size: 19px; }
+}
+@media (max-height: 520px) {
+  .card.menu h2 { margin: 8px 0 6px; }
+  .choice .outline { height: 44px; }
+  .choices.classes .choice { min-height: 0; }
+  .opts { gap: 6px 12px; margin-top: 8px; }
+  .seg button { padding: 7px 4px; font-size: 12px; }
+  .screen.podium-mode .card { width: min(560px, 70vw); }
+  .hud-msg { font-size: 20px; top: 46%; }
+  .hud-lights { top: 27%; }
+}

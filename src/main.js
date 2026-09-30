@@ -7,11 +7,12 @@ import { Wheel } from './control/wheel.js';
 import { Coach } from './control/coach.js';
 import { KeyboardControl } from './control/keyboard.js';
 import { Graphics, hasWebGL2 } from './render/scene.js';
-import { CameraRig, FlyScript } from './render/cameras.js';
+import { CameraRig, FlyScript, CAMERA_NAMES } from './render/cameras.js';
 import { World } from './render/world.js';
 import { buildCarModel } from './render/carModel.js';
 import { Podium } from './render/podium.js';
 import { QualityManager } from './render/quality.js';
+import { Particles, emitFromCar, emitWallSparks } from './render/particles.js';
 import { Track } from './game/track.js';
 import { computeRacingLine, speedProfile, brakingPoints } from './game/profile.js';
 import { CARS, CLASS_IDS } from './game/cars.js';
@@ -64,6 +65,9 @@ const rig = new CameraRig(gfx.camera);
 const world = new World(gfx);
 const hud = new Hud($('hud'));
 const podium = new Podium();
+const fx = new Particles(gfx.scene);
+fx.setViewport(gfx.height);
+window.addEventListener('resize', () => fx.setViewport(gfx.height));
 
 const IDLE = { steer: 0, gas: false, brake: false, nitro: false, errors: [] };
 let lodScale = 1;
@@ -75,6 +79,7 @@ const quality = new QualityManager({
     gfx.applyFar();
     world.setRealLights(p.realLights);
     lodScale = p.lodScale;
+    fx.setBudget(p.id === 'low' ? 0.4 : p.id === 'medium' ? 0.75 : 1);
     // вызывается после объявления app и game (quality.setMode ниже)
     for (const m of [game.model, ...game.botModels]) m?.setLodScale(p.lodScale);
     app.detectHz = p.id === 'low' ? 24 : 30;
@@ -300,6 +305,7 @@ function startWeekend(format) {
 
 function beginSession(S) {
   game.session = S;
+  fx.clear();
   game.analyzer = new DriveAnalyzer(game.track, game.prof, game.bps, game.spec);
   app.acc = 0;
   app.lostT = 0;
@@ -399,11 +405,24 @@ function onSessionEvent(e) {
       hud.message(`Обгон! P${e.pos}`, 'good', 1.6);
       break;
     case 'contact':
-      audio.crash();
+      audio.crash(0.4 + e.speed * 0.1);
       break;
-    case 'wall':
-      if (e.entry?.isPlayer) audio.crash();
+    case 'wall': {
+      const car = game.session?.playerCar;
+      if (e.entry?.isPlayer && car) {
+        audio.crash(e.speed / 8);
+        emitWallSparks(fx, car, e.side, e.total || e.speed);
+      }
       break;
+    }
+    case 'scrape': {
+      const car = game.session?.playerCar;
+      if (car && Math.random() < 0.25) {
+        emitWallSparks(fx, car, e.side, e.speed * 0.5);
+        audio.scrape();
+      }
+      break;
+    }
     case 'attempt':
       if (e.n > 1) hud.message(`Попытка ${e.n}`, 'info', 1.5);
       break;
@@ -700,7 +719,46 @@ function tick(now, dt) {
     gfx.render();
   }
 
-  audio.update(car && driving ? speedOf(car) / game.spec.vmax : 0, !!car && driving && car.abs && car.brake > 0.3, !!car?.boostOn, !!driving);
+  // звук: двигатель по оборотам, тормоза, занос, поребрик, ближайший соперник
+  if (car && driving) {
+    let nearest = null;
+    if (app.state === 'race') {
+      for (const b of S.bots) {
+        const dx = b.x - car.x, dz = b.z - car.z;
+        const dist = Math.hypot(dx, dz);
+        if (!nearest || dist < nearest.dist) {
+          // панорама: проекция на правую сторону камеры
+          const right = Math.cos(car.psi) * -dx + Math.sin(car.psi) * dz;
+          nearest = { dist, pan: (right / Math.max(4, dist)) * 1.2, speed: b.v };
+        }
+      }
+    }
+    audio.update({
+      active: true,
+      spec: game.spec,
+      rpm: car.rpm,
+      gear: car.gear,
+      throttle: car.throttle,
+      speed: speedOf(car),
+      abs: car.abs && car.brake > 0.3,
+      slide: Math.max(car.over, car.under * 0.6, car.wheelspin ? 0.6 : 0),
+      kerb: car.onKerb,
+      boost: car.boostOn,
+      nearest,
+    });
+    emitFromCar(fx, car, game.track, dt, { wet: !!game.track.def.env?.wet, offType: game.track.def.env?.ground === 'sand' ? 'sand' : 'dust', f1: game.spec.id === 'f1' });
+    // брызги за соперниками на мокром асфальте (только близкие к камере)
+    if (game.track.def.env?.wet && app.state === 'race') {
+      for (const b of S.bots) {
+        if (b.v < 15 || Math.random() > dt * 18) continue;
+        const dx = b.x - gfx.camera.position.x, dz = b.z - gfx.camera.position.z;
+        if (dx * dx + dz * dz > 80 * 80) continue;
+        const sp = Math.sin(b.psi), cp = Math.cos(b.psi);
+        fx.emit('spray', b.x - sp * 1.8, b.y + 0.2, b.z - cp * 1.8, -sp * b.v * 0.2, 0.8, -cp * b.v * 0.2, 1.4);
+      }
+    }
+  } else audio.update({ active: false });
+  fx.update(app.state === 'paused' ? 0 : dt);
 
   if (driving && (app.state === 'race' || app.state === 'quali')) updateHud(S, car, input, dt);
 
@@ -759,6 +817,11 @@ function updateHud(S, car, input, dt) {
 }
 
 // ---------- кнопки и клавиши ----------
+function switchCamera() {
+  const mode = rig.next();
+  if (app.state === 'race' || app.state === 'quali') hud.message(`Камера: ${CAMERA_NAMES[mode].toLowerCase()}`, 'info', 1.2);
+}
+
 function toggleMute() {
   audio.init();
   audio.setMuted(!audio.muted);
@@ -785,6 +848,7 @@ function toggleKeyboard() {
 $('btn-mute').textContent = audio.muted ? '🔇' : '🔊';
 $('btn-mute').onclick = toggleMute;
 $('btn-kb').onclick = toggleKeyboard;
+$('btn-cam').onclick = switchCamera;
 $('btn-pause').onclick = () => (app.state === 'paused' ? resume() : pause());
 
 document.querySelectorAll('#touch button').forEach((btn) => {
@@ -807,7 +871,7 @@ window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement) return;
   if (e.code === 'KeyK') toggleKeyboard();
   if (e.code === 'KeyM') toggleMute();
-  if (e.code === 'KeyC') rig.next();
+  if (e.code === 'KeyC') switchCamera();
   if (e.code === 'Backquote') debugEl.classList.toggle('hidden');
   if (e.code === 'Escape' || e.code === 'KeyP') {
     if (app.state === 'paused') resume();

@@ -253,7 +253,8 @@ export class Hud {
     ctx.fillText(car.boostOn ? 'ВКЛ' : ready ? `${Math.round(e * 100)}%` : 'заряд', cx, cy + 14 * u);
     ctx.fillStyle = '#9fb0d0';
     ctx.font = `600 ${11 * u}px system-ui, sans-serif`;
-    ctx.fillText(s.keyboard ? 'Shift / N' : '👍 0,3 с', cx, cy + r + 20 * u);
+    const touch = s.keyboard && window.matchMedia?.('(pointer: coarse)').matches;
+    ctx.fillText(touch ? 'кнопка ⚡' : s.keyboard ? 'Shift / N' : '👍 0,3 с', cx, cy + r + 20 * u);
     void dpr;
   }
 

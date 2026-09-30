@@ -40,7 +40,7 @@ export const CARS = {
     rpm: { idle: 1300, max: 8800, shift: 8500 },
     shiftTime: 0.08,
     boost: { name: 'Boost', time: 3.0, power: 1.22, recharge: 1 / 12, harvest: 0 },
-    dims: { length: 4.6, width: 2.0, height: 1.25, track: 1.66, wheelR: 0.345, wheelW: 0.31, eye: 1.05, hood: 0.4 },
+    dims: { length: 4.6, width: 2.0, height: 1.25, track: 1.66, wheelR: 0.345, wheelW: 0.31, eye: 1.08, hood: 1.05 },
     sound: { cylinders: 6, base: 0.5, character: 'growl' },
   },
 };
@@ -78,7 +78,7 @@ CARS.f1 = {
   rpm: { idle: 4000, max: 12500, shift: 12000 },
   shiftTime: 0.03,
   boost: { name: 'ERS', time: 4.0, power: 1.21, recharge: 1 / 45, harvest: 0.22 }, // заряд — при торможении
-  dims: { length: 5.6, width: 2.0, height: 0.95, track: 1.62, wheelR: 0.36, wheelW: 0.38, eye: 1.02, hood: -0.1, cgZ: -0.3 },
+  dims: { length: 5.6, width: 2.0, height: 0.95, track: 1.62, wheelR: 0.36, wheelW: 0.38, eye: 1.3, hood: -0.35, cgZ: -0.3 },
   sound: { cylinders: 6, base: 1, character: 'whine' },
 };
 

@@ -44,7 +44,7 @@ export class Podium {
     }
 
     scene.add(new THREE.HemisphereLight(0x8fa6ff, 0x101018, 0.6));
-    const spot = new THREE.SpotLight(0xffffff, 900, 60, 0.55, 0.5, 1.6);
+    const spot = new THREE.SpotLight(0xffffff, 260, 60, 0.55, 0.5, 1.6);
     spot.position.set(0, 18, 10);
     spot.target.position.set(0, 1, 0);
     spot.castShadow = true;
@@ -54,7 +54,7 @@ export class Podium {
       [-14, 0xff4d8d],
       [14, 0x4db8ff],
     ]) {
-      const s = new THREE.SpotLight(c, 500, 50, 0.5, 0.6, 1.5);
+      const s = new THREE.SpotLight(c, 140, 50, 0.5, 0.6, 1.5);
       s.position.set(x, 10, 6);
       s.target.position.set(0, 0, 0);
       scene.add(s, s.target);

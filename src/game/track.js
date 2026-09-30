@@ -137,6 +137,40 @@ export class Track {
     // сектора S1/S2/S3 — три равные части круга
     this.sectors = [0, len / 3, (2 * len) / 3];
     this.bounds = this.computeBounds();
+    this.corners = this.findCorners(def.corners || []);
+  }
+
+  // Повороты из данных: вершина — максимум |κ| рядом с подсказкой t,
+  // вход/выход — где кривизна падает до четверти от вершинной.
+  findCorners(hints) {
+    const win = Math.round((0.035 * this.length) / this.ds);
+    return hints.map((h) => {
+      const c0 = Math.round(h.t * this.n);
+      let apex = c0, best = 0;
+      for (let k = -win; k <= win; k++) {
+        const i = this.wrap(c0 + k);
+        const a = Math.abs(this.kappa[i]);
+        if (a > best) {
+          best = a;
+          apex = i;
+        }
+      }
+      const lim = Math.max(best * 0.25, 1 / 500);
+      let entry = apex, exit = apex;
+      for (let k = 0; k < win * 2 && Math.abs(this.kappa[this.wrap(entry - 1)]) > lim; k++) entry = this.wrap(entry - 1);
+      for (let k = 0; k < win * 2 && Math.abs(this.kappa[this.wrap(exit + 1)]) > lim; k++) exit = this.wrap(exit + 1);
+      return {
+        name: h.name,
+        type: h.type || 'turn',
+        apex,
+        entry,
+        exit,
+        dir: Math.sign(this.kappa[apex]) || 1, // +1 налево, −1 направо
+        radius: 1 / Math.max(best, 1e-4),
+        sApex: apex * this.ds,
+        sEntry: entry * this.ds,
+      };
+    });
   }
 
   wrap(i) {
@@ -251,6 +285,15 @@ export class Track {
     out.s = (i + f) * this.ds;
     out.d = (x - px) * nx + (z - pz) * nz;
     return out;
+  }
+
+  // Место на стартовой решётке: пары со сдвигом (8 м между машинами), поул — изнутри первого поворота.
+  gridSlot(k) {
+    const pole = this.corners[0]?.dir ?? 1;
+    const side = k % 2 === 0 ? pole : -pole;
+    const s = -(10 + 8 * k);
+    const i = this.index(s);
+    return { s, d: side * Math.min(3.3, this.hw[i] * 0.3) };
   }
 
   // Поверхность под точкой с боковым смещением d на индексе i.

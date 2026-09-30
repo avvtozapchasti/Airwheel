@@ -8,10 +8,9 @@ import { Coach } from './control/coach.js';
 import { KeyboardControl } from './control/keyboard.js';
 import { Graphics, hasWebGL2 } from './render/scene.js';
 import { CameraRig } from './render/cameras.js';
-import { buildRoad } from './render/trackMesh.js';
-import * as TX from './render/textures.js';
+import { World } from './render/world.js';
 import { Track } from './game/track.js';
-import TEST_TRACK from './game/tracks/test.js';
+import ALPINE from './game/tracks/alpine.js';
 import { drawPreview } from './ui/preview.js';
 import { Onboarding } from './ui/onboarding.js';
 
@@ -61,31 +60,13 @@ if (!hasWebGL2()) {
 
 const gfx = new Graphics($('game'));
 const rig = new CameraRig(gfx.camera);
-const world = { track: null, group: null };
+const world = new World(gfx);
 
 function loadTrack(def) {
-  const track = new Track(def);
-  const group = new THREE.Group();
-  group.add(buildRoad(track));
-  // временная земля под тестовой дорогой
-  const g = TX.grass();
-  g.map.repeat.set(200, 200);
-  g.normalMap.repeat.set(200, 200);
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(6000, 6000),
-    new THREE.MeshStandardMaterial({ map: g.map, normalMap: g.normalMap, roughness: 0.95 }),
-  );
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = track.bounds.minY - 0.4;
-  ground.receiveShadow = true;
-  group.add(ground);
-  gfx.scene.add(group);
-  gfx.setEnvironment(def.env || {});
-  world.track = track;
-  world.group = group;
+  world.load(new Track(def));
 }
 
-loadTrack(TEST_TRACK);
+loadTrack(ALPINE);
 
 // ---------- онбординг ----------
 const onboarding = new Onboarding(screenEl, {
@@ -151,6 +132,7 @@ function updateDemo(dt) {
   demoTarget.s = app.demoS;
   rig.update(dt, demoTarget, tr);
   gfx.followSun(demoTarget.pos);
+  world.update(gfx.camera.position);
 }
 
 function frame(now) {

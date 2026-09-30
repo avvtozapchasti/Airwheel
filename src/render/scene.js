@@ -85,6 +85,7 @@ export class Graphics {
     const f = env.fog || {};
     this.scene.fog = new THREE.Fog(f.color ?? 0xc8d8e8, f.near ?? 300, f.far ?? 2200);
     this.renderer.toneMappingExposure = env.exposure ?? 1;
+    this.scene.environmentIntensity = env.envIntensity ?? 0.4;
     this.camera.far = env.far ?? 2500;
     this.camera.updateProjectionMatrix();
     this.bakeEnvironment();

@@ -96,7 +96,7 @@ export function asphalt({ wet = false, lines = true } = {}) {
     const rough = canvas(S);
     const rctx = rough.getContext('2d');
     const rimg = rctx.createImageData(S, S);
-    const base = wet ? 38 : 62;
+    const base = wet ? 34 : 50;
     for (let y = 0; y < S; y++) {
       for (let x = 0; x < S; x++) {
         const i = y * S + x;
@@ -125,8 +125,8 @@ export function asphalt({ wet = false, lines = true } = {}) {
     rctx.putImageData(rimg, 0, 0);
     // пятна-заплатки
     const pr = rng(9);
-    ctx.globalAlpha = 0.12;
-    for (let k = 0; k < 7; k++) {
+    ctx.globalAlpha = 0.05;
+    for (let k = 0; k < 5; k++) {
       ctx.fillStyle = pr() < 0.5 ? '#000' : '#888';
       ctx.fillRect(pr() * S * 0.8 + S * 0.08, pr() * S, 20 + pr() * 60, 30 + pr() * 90);
     }
@@ -162,7 +162,7 @@ function paletteNoise(key, S, cells, oct, seed, colorFn) {
 export const grass = () =>
   paletteNoise('grass', 256, 8, 5, 21, (v, g) => {
     const k = 0.75 + v * 0.5 + (g - 0.5) * 0.25;
-    return [62 * k, 104 * k, 44 * k];
+    return [52 * k, 92 * k, 34 * k];
   });
 
 export const dryGrass = () =>
@@ -307,6 +307,90 @@ export function windows({ lit = 0.45, seed = 71, tint = '#ffd9a0' } = {}) {
       }
     }
     return { map: toTexture(c), emissiveMap: toTexture(e) };
+  });
+}
+
+// Ограждение armco: оцинкованный металл с двумя волнами профиля (u — по высоте).
+export function armco() {
+  return cached('armco', () => {
+    const c = canvas(64, 128), ctx = c.getContext('2d');
+    const g = ctx.createLinearGradient(0, 0, 64, 0);
+    const stops = [[0, '#6f757c'], [0.2, '#c9ced4'], [0.35, '#8c9299'], [0.5, '#d7dbe0'], [0.65, '#8c9299'], [0.8, '#c9ced4'], [1, '#6f757c']];
+    // полоса профиля только в верхней части (u 0.55..0.95), ниже — стойки/тень
+    ctx.fillStyle = '#3c4146';
+    ctx.fillRect(0, 0, 64, 128);
+    for (const [o, col] of stops) g.addColorStop(o, col);
+    ctx.fillStyle = g;
+    ctx.fillRect(34, 0, 26, 128);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    for (let y = 0; y < 128; y += 32) ctx.fillRect(34, y, 26, 2);
+    return toTexture(c);
+  });
+}
+
+// Бетонный блок с красно-белой полосой сверху (u — по высоте стены).
+export function concreteWall() {
+  return cached('concreteWall', () => {
+    const c = canvas(64, 256), ctx = c.getContext('2d');
+    const r = rng(81);
+    ctx.fillStyle = '#b8b8b2';
+    ctx.fillRect(0, 0, 64, 256);
+    for (let k = 0; k < 900; k++) {
+      ctx.fillStyle = `rgba(0,0,0,${r() * 0.12})`;
+      ctx.fillRect(r() * 64, r() * 256, 2, 2);
+    }
+    for (let y = 0; y < 256; y += 64) {
+      ctx.fillStyle = (y / 64) % 2 ? '#d61f1f' : '#f4f4f4';
+      ctx.fillRect(52, y, 12, 64);
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.fillRect(0, y, 64, 1);
+    }
+    return toTexture(c);
+  });
+}
+
+// Сетка забора (альфа-тест).
+export function fence() {
+  return cached('fence', () => {
+    const c = canvas(64), ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, 64, 64);
+    ctx.strokeStyle = '#c8ccd2';
+    ctx.lineWidth = 2;
+    for (let k = -64; k < 128; k += 16) {
+      ctx.beginPath();
+      ctx.moveTo(k, 0);
+      ctx.lineTo(k + 64, 64);
+      ctx.moveTo(k + 64, 0);
+      ctx.lineTo(k, 64);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#9aa0a8';
+    ctx.fillRect(0, 0, 64, 4);
+    ctx.fillRect(0, 60, 64, 4);
+    const t = toTexture(c);
+    t.repeat.set(1, 1);
+    return t;
+  });
+}
+
+// Зрители на трибунах: цветные точки на тёмных сиденьях.
+export function crowd() {
+  return cached('crowd', () => {
+    const c = canvas(256), ctx = c.getContext('2d');
+    const r = rng(91);
+    ctx.fillStyle = '#3a3f4a';
+    ctx.fillRect(0, 0, 256, 256);
+    const cols = ['#e63946', '#f1faee', '#ffcc33', '#1d3557', '#2a9d8f', '#f4a261', '#ffffff', '#e76f51', '#8ecae6'];
+    for (let k = 0; k < 2600; k++) {
+      ctx.fillStyle = cols[Math.floor(r() * cols.length)];
+      const x = r() * 256, y = r() * 256;
+      ctx.fillRect(x, y, 3, 4);
+      ctx.fillStyle = '#e0b89a';
+      ctx.fillRect(x + 0.5, y - 2, 2, 2);
+    }
+    const t = toTexture(c);
+    t.repeat.set(4, 1);
+    return t;
   });
 }
 

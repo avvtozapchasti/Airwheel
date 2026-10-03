@@ -124,6 +124,24 @@ export function buildRoad(track, { wet = false, rubber = null } = {}) {
     normalScale: new THREE.Vector2(wet ? 0.22 : 0.35, wet ? 0.22 : 0.35),
     envMapIntensity: wet ? 1.0 : 0.3,
   });
+  // две частоты износа в мировых координатах (пятна 40 и 160 м): асфальт не выглядит плиткой
+  const macro = TX.macroNoise();
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.tMacro = { value: macro };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vRoadXZ;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvRoadXZ = (modelMatrix * vec4(transformed, 1.0)).xz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform sampler2D tMacro;\nvarying vec2 vRoadXZ;\nfloat roadMacro;')
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        roadMacro = texture2D(tMacro, vRoadXZ / 160.0).r * 0.6 + texture2D(tMacro, vRoadXZ / 41.0 + 0.31).r * 0.4;
+        diffuseColor.rgb *= 0.8 + roadMacro * 0.38;`,
+      )
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor *= 0.86 + roadMacro * 0.24;');
+  };
+  mat.customProgramCacheKey = () => 'road-macro';
   patchWet(mat);
   const mesh = new THREE.Mesh(geo.build(), mat);
   mesh.receiveShadow = true;
@@ -167,18 +185,30 @@ function buildWalls(track, kind) {
   const concrete = kind === 'concrete';
   const tyres = kind === 'tyres';
   const H = concrete ? 1.15 : tyres ? 0.75 : 0.8;
-  const geo = new Geo();
+  const geo = new Geo(true);
   // на мосту вместо обычного ограждения — бетонные парапеты (строятся с мостом)
   const segs = track.bridge ? runs(track, (i) => !track.onBridge(i * track.ds)) : [[0, track.n]];
   for (const side of [1, -1]) {
     const wd = (i) => (side > 0 ? track.wallL[i] : -track.wallR[i]);
     const base = (i) => edgeY(track, i, wd(i)) - 0.25;
     if (concrete) {
-      // бетонный блок: внутренняя грань, верх, внешняя грань (толщина 0.5 м)
+      // блок «Нью-Джерси»: внутренняя грань — пологий низ (0.45 м) и почти вертикальный верх,
+      // верх, внешняя грань (толщина 0.5 м). Внизу — грязь и следы шин (темнее у поворотов).
       const th = 0.5 * side;
       const top = (i) => base(i) + H + 0.25;
-      strip(geo, track, 0, track.n, (i) => [wd(i), wd(i)], { y: (i, d, c) => (c === 0 ? base(i) : top(i)), u: (c) => c, vLen: 6 });
-      strip(geo, track, 0, track.n, (i) => [wd(i), wd(i) + th], { y: top, u: (c) => 0.9 + c * 0.1, vLen: 6 });
+      const grime = (i, d, c) => {
+        if (c > 0) return c === 1 ? [0.82, 0.82, 0.8] : [1, 1, 1];
+        const k = 0.5 + 0.12 * Math.sin(i * 0.37) * Math.sin(i * 0.11) - Math.min(0.2, Math.abs(track.kappa[i]) * 18);
+        return [k, k, k * 0.98];
+      };
+      strip(geo, track, 0, track.n, (i) => [wd(i), wd(i) + side * 0.17, wd(i) + side * 0.25], {
+        y: (i, d, c) => (c === 0 ? base(i) + 0.25 : c === 1 ? base(i) + 0.7 : top(i)),
+        u: (c) => [0.12, 0.42, 1][c],
+        vLen: 6,
+        color: grime,
+      });
+      strip(geo, track, 0, track.n, (i) => [wd(i), wd(i)], { y: (i, d, c) => (c === 0 ? base(i) : base(i) + 0.25), u: (c) => c * 0.12, vLen: 6, color: () => [0.45, 0.45, 0.44] });
+      strip(geo, track, 0, track.n, (i) => [wd(i) + side * 0.25, wd(i) + th], { y: top, u: (c) => 0.9 + c * 0.1, vLen: 6 });
       strip(geo, track, 0, track.n, (i) => [wd(i) + th, wd(i) + th], { y: (i, d, c) => (c === 0 ? top(i) : base(i)), u: (c) => 1 - c, vLen: 6 });
     } else {
       for (const [i0, cnt] of segs)
@@ -192,6 +222,7 @@ function buildWalls(track, kind) {
   const tex = concrete ? TX.concreteWall() : tyres ? TX.tyres() : TX.armco();
   const mat = new THREE.MeshStandardMaterial({
     map: tex,
+    vertexColors: true,
     roughness: concrete || tyres ? 0.85 : 0.35,
     metalness: concrete || tyres ? 0 : 0.55,
     side: THREE.DoubleSide,

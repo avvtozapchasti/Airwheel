@@ -24,6 +24,41 @@ export function hasWebGL2() {
 const DEG = Math.PI / 180;
 
 // Ночное небо: градиент, свечение города у горизонта, звёзды, луна.
+// Пасмурный купол для дождя днём: серые облака поверх неба (рисуется на дальней плоскости,
+// как небо), плотность — k (сила дождя), у горизонта светлее, вверху темнее, с мягкой текстурой.
+function overcastMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: { k: { value: 0 }, top: { value: new THREE.Color(0x5d6670) }, low: { value: new THREE.Color(0xa7b0ba) }, time: { value: 0 } },
+    vertexShader: /* glsl */ `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize((modelMatrix * vec4(position, 0.0)).xyz);
+        vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        gl_Position = p.xyww;
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform float k;
+      uniform vec3 top;
+      uniform vec3 low;
+      uniform float time;
+      varying vec3 vDir;
+      float h(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float n(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(h(i), h(i + vec2(1, 0)), f.x), mix(h(i + vec2(0, 1)), h(i + vec2(1, 1)), f.x), f.y); }
+      void main() {
+        float y = clamp(vDir.y, 0.0, 1.0);
+        vec2 uv = vDir.xz / max(0.12, vDir.y + 0.15) * 1.6 + vec2(time * 0.01, 0.0);
+        float c = n(uv) * 0.55 + n(uv * 2.3) * 0.3 + n(uv * 5.1) * 0.15;
+        vec3 col = mix(low, top, smoothstep(0.0, 0.6, y)) * (0.86 + c * 0.28);
+        gl_FragColor = vec4(col, k * smoothstep(-0.25, 0.05, vDir.y));
+      }`,
+    side: THREE.BackSide,
+    transparent: true,
+    depthWrite: false,
+    fog: false,
+  });
+}
+
 function nightSkyMaterial() {
   return new THREE.ShaderMaterial({
     uniforms: {
@@ -290,6 +325,12 @@ export class Graphics {
     this.nightSky.frustumCulled = false;
     this.nightSky.visible = false;
     this.scene.add(this.nightSky);
+    this.overcast = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), overcastMaterial());
+    this.overcast.scale.setScalar(14000);
+    this.overcast.frustumCulled = false;
+    this.overcast.visible = false;
+    this.overcast.renderOrder = -1;
+    this.scene.add(this.overcast);
     this.night = false;
     this.pmrem = new THREE.PMREMGenerator(r);
     this.envRT = null;
@@ -355,6 +396,7 @@ export class Graphics {
       u.horizon.value.set(s.horizon ?? 0x2b2238);
       u.zenith.value.set(s.zenith ?? 0x03050d);
       u.stars.value = s.stars ?? 1;
+      this.starsBase = u.stars.value;
       u.moonDir.value.copy(this.sunDir);
     } else {
       const u = this.sky.material.uniforms;
@@ -413,6 +455,10 @@ export class Graphics {
     this.renderer.toneMappingExposure = B.exposure * (1 - 0.12 * k);
     this.scene.environmentIntensity = B.env * (1 + 0.4 * k);
     if (this.sky.visible) this.sky.material.uniforms.rayleigh.value = (this.skyBase ?? (this.skyBase = this.sky.material.uniforms.rayleigh.value)) * (1 - 0.5 * k);
+    // днём — серый облачный купол поверх неба; ночью — звёзды гаснут за тучами
+    this.overcast.visible = !this.night && k > 0.01;
+    this.overcast.material.uniforms.k.value = Math.min(0.94, k * 1.15);
+    if (this.night) this.nightSky.material.uniforms.stars.value = (this.starsBase ?? 1) * (1 - 0.9 * k);
     // окружение для отражений перепекаем только при заметной смене (дорого, но редко)
     const oc = k > 0.25 ? 1 : 0;
     if (!this.night && oc !== (this.envOvercast ? 1 : 0)) this.bakeEnvironment(oc);

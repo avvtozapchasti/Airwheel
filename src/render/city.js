@@ -122,7 +122,7 @@ export function buildingMaterial(night, { fogScale = 1, far = false } = {}) {
           float litFrac = 0.12 + 0.5 * fract(vStyle.y * 13.37);
           float on = step(hash12(cell + vStyle.y * 117.0), litFrac);
           float fw = fwidth(vWinUv.x * 8.0) + fwidth(vWinUv.y * 16.0);
-          on = mix(on, litFrac * 0.8, smoothstep(0.25, 0.9, fw));
+          on = mix(on, litFrac * 0.8, smoothstep(0.12, 0.5, fw));
           float shopOn = step(0.45, hash12(vec2(seg * 1.7, vStyle.y * 9.0)));
           vec3 shopE = mix(vec3(1.0, 0.72, 0.42), vec3(0.75, 0.88, 1.0), step(0.6, hash12(vec2(seg, vStyle.y * 31.0)))) * pane * shopOn * (0.2 + 0.35 * hash12(vec2(seg, 3.0)));
           totalEmissiveRadiance *= mix(em * on, shopE, shop) * wallK;

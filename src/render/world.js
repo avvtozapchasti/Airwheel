@@ -54,7 +54,7 @@ export class World {
     fg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(CARS_MAX * 4 * 3), 3).setUsage(THREE.DynamicDrawUsage));
     fg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(CARS_MAX * 4 * 3), 3).setUsage(THREE.DynamicDrawUsage));
     fg.setAttribute('blink', new THREE.BufferAttribute(new Float32Array(CARS_MAX * 4 * 4), 4).setUsage(THREE.DynamicDrawUsage));
-    this.flares = new THREE.Points(fg, glowPointsMaterial({ streak: 1, maxPx: 90 }));
+    this.flares = new THREE.Points(fg, glowPointsMaterial({ streak: 1, maxPx: 72 }));
     this.flares.frustumCulled = false;
     this.flares.renderOrder = 3;
     fg.setDrawRange(0, 0);
@@ -221,7 +221,7 @@ export class World {
           const tz = c.f1 ? -L / 2 - 0.2 : -L / 2 + 0.02, tx = c.f1 ? 0.52 : 0.7;
           // своя машина — у самой камеры: блики меньше
           const tb = (0.55 + brake * 1.5) * (c.player ? 0.5 : 1);
-          for (const sx of [-tx, tx]) put(sx, 0.8, tz, tb * 1.6, tb * 0.12, tb * 0.08, (0.35 + brake * 0.25) * (c.player ? 0.6 : 1));
+          for (const sx of [-tx, tx]) put(sx, 0.8, tz, tb * 1.6, tb * 0.12, tb * 0.08, (0.3 + brake * 0.2) * (c.player ? 0.6 : 1));
         }
         // отражение стоп-сигналов: ночью всегда (тускло, на мокром ярче), днём — только на мокром
         const refl = (this.night ? (0.14 + brake * 0.4) * (0.3 + wet * 0.9) : brake * 0.3 * wet) * (c.player ? 0.4 : 1);

@@ -139,6 +139,20 @@ export function asphalt({ wet = false, lines = true } = {}) {
   });
 }
 
+// Крупный мягкий шум (тайлится): пятна разного износа асфальта — ломает повтор текстуры.
+export function macroNoise() {
+  return cached('macro', () => {
+    const S = 128, h = fbm(S, 4, 4, 23);
+    const c = canvas(S), ctx = c.getContext('2d'), img = ctx.createImageData(S, S);
+    for (let i = 0; i < S * S; i++) {
+      img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = Math.round(h[i] * 255);
+      img.data[i * 4 + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    return toTexture(c, { srgb: false, aniso: 2 });
+  });
+}
+
 // Цветной шум с палитрой (трава, песок, гравий, бетон, скалы).
 function paletteNoise(key, S, cells, oct, seed, colorFn) {
   return cached(key, () => {

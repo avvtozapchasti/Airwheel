@@ -86,7 +86,7 @@ export class Podium {
     this.scene.environment = environment || null;
     top3.forEach((c, k) => {
       if (!c) return;
-      const m = buildCarModel(c.spec, { color: c.color, player: true });
+      const m = buildCarModel(c.spec, { color: c.color, livery: c.livery || null, number: c.livery ? 27 : 0, player: true });
       const b = this.blocks[k];
       m.update({ x: b.x, y: b.h, z: 0, psi: Math.PI * 0.85 + (k === 1 ? 0.25 : k === 2 ? -0.25 : 0), pitch: 0, roll: 0, spin: 0, delta: 0.2, brake: 0 });
       this.scene.add(m.root);

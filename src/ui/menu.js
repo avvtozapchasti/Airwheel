@@ -1,5 +1,5 @@
 // Меню гоночного уик-энда: трасса, класс, число кругов, помощь рулём, соперники, графика,
-// погода и стартовые шины.
+// погода, стартовые шины и окраска машины.
 // Старт — кнопкой, Enter или поднятыми ладонями (1 с).
 import { recordLine } from './leaderboard.js';
 import { esc } from '../util/format.js';
@@ -97,6 +97,13 @@ export class Menu {
           </button>`,
           )
           .join('')}</div>
+        <h2>Окраска</h2>
+        <div class="liveries">${(this.h.liveries || [])
+          .map(
+            (L, k) => `<button class="livery ${Number(settings.livery ?? 0) === k ? 'on' : ''}" data-livery="${k}" title="${esc(L.name)}">
+              <i style="background:linear-gradient(135deg, ${L.base} 0 58%, ${L.accent} 58% 76%, ${L.stripe} 76%)"></i><span>${esc(L.name)}</span></button>`,
+          )
+          .join('')}</div>
         <div class="opts">
           <label>Круги ${seg('laps')}</label>
           <label>Помощь рулём ${seg('assist')}</label>
@@ -117,6 +124,7 @@ export class Menu {
     const q = (sel) => this.root.querySelector(sel);
     this.root.querySelectorAll('[data-track]').forEach((b) => (b.onclick = () => this.set('trackId', b.dataset.track)));
     this.root.querySelectorAll('[data-cls]').forEach((b) => (b.onclick = () => this.set('cls', b.dataset.cls)));
+    this.root.querySelectorAll('[data-livery]').forEach((b) => (b.onclick = () => this.set('livery', +b.dataset.livery)));
     this.root.querySelectorAll('.seg').forEach((g) => {
       g.querySelectorAll('button').forEach((b) => {
         b.onclick = () => {

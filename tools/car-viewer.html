@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="UTF-8" /><title>Просмотр машин</title>
+<style>html,body{margin:0;height:100%;background:#1a1d24;overflow:hidden}canvas{display:block}</style></head>
+<body>
+<canvas id="c"></canvas>
+<script type="module">
+// Инструмент разработки: машина в студии (как в игре — те же материалы и ливрея).
+// ?car=gt3|f1&view=front|side|rear|top|three&livery=0..7
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { CARS } from '../src/game/cars.js';
+import { buildCarModel, preloadCars, LIVERIES, carSource } from '../src/render/carModel.js';
+const P = new URLSearchParams(location.search);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+r.setSize(innerWidth, innerHeight);
+r.toneMapping = THREE.ACESFilmicToneMapping;
+r.shadowMap.enabled = true;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x2a2f3a);
+scene.environment = new THREE.PMREMGenerator(r).fromScene(new RoomEnvironment(), 0.04).texture;
+const sun = new THREE.DirectionalLight(0xffffff, 2.5);
+sun.position.set(4, 8, 5);
+sun.castShadow = true;
+scene.add(sun, new THREE.HemisphereLight(0xffffff, 0x334455, 0.6));
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshStandardMaterial({ color: 0x3a3e46, roughness: 0.8 }));
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+if (!P.has('proc')) await preloadCars([P.get('car') || 'gt3']);
+const spec = CARS[P.get('car') || 'gt3'];
+const m = buildCarModel(spec, { livery: LIVERIES[+(P.get('livery') || 0)], number: 27, player: true });
+m.update({ x: 0, y: 0, z: 0, psi: 0, spin: 0.3, delta: 0.25, brake: +(P.get('brake') || 0), u: 40 }, 1, 2, { night: false, wet: false });
+scene.add(m.root);
+const cam = new THREE.PerspectiveCamera(32, innerWidth / innerHeight, 0.1, 100);
+const V = { three: [6.5, 2.6, 7.5], front: [0, 1.2, 9], side: [9.5, 1.1, 0], rear: [0, 1.6, -9], top: [0, 12, 0.01], low: [4.5, 0.6, 5.5] }[P.get('view') || 'three'];
+cam.position.set(...V);
+cam.lookAt(0, 0.55, 0);
+r.render(scene, cam);
+document.title = 'ready ' + carSource(spec.id);
+</script>
+</body>
+</html>

@@ -7,10 +7,15 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "build:cars": "node tools/build-cars.mjs",
     "postinstall": "node scripts/copy-wasm.js",
     "test": "node tests/coach.test.mjs && node tests/game.test.mjs && node tests/net.test.mjs"
   },
   "devDependencies": {
+    "@gltf-transform/core": "^4.5.1",
+    "@gltf-transform/extensions": "^4.5.1",
+    "@gltf-transform/functions": "^4.5.1",
+    "meshoptimizer": "^1.3.0",
     "vite": "^8.3.1"
   },
   "dependencies": {

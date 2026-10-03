@@ -246,6 +246,76 @@ export function carbon() {
   });
 }
 
+// Normal map карбонового плетения: наклон волокон чередуется по клеткам.
+export function carbonNormal() {
+  return cached('carbonNormal', () => {
+    const S = 128, cell = 8;
+    const h = new Float32Array(S * S);
+    for (let y = 0; y < S; y++)
+      for (let x = 0; x < S; x++) {
+        const cx = Math.floor(x / cell), cy = Math.floor(y / cell);
+        const fx = (x % cell) / cell, fy = (y % cell) / cell;
+        const odd = (cx + cy) % 2;
+        h[y * S + x] = odd ? Math.sin(Math.PI * fx) * 0.9 : Math.sin(Math.PI * fy) * 0.9;
+      }
+    const t = toTexture(normalFromHeight(h, S, 1.6), { srgb: false });
+    t.repeat.set(4, 4);
+    return t;
+  });
+}
+
+// Сетка воздухозаборника (соты).
+export function grille() {
+  return cached('grille', () => {
+    const S = 128, c = canvas(S), ctx = c.getContext('2d');
+    ctx.fillStyle = '#0a0b0d';
+    ctx.fillRect(0, 0, S, S);
+    ctx.strokeStyle = '#3a3f46';
+    ctx.lineWidth = 2;
+    const r = 8;
+    for (let y = 0; y < S + r; y += r * 1.5)
+      for (let x = 0; x < S + r; x += r * Math.sqrt(3)) {
+        const ox = (Math.round(y / (r * 1.5)) % 2) * (r * Math.sqrt(3)) / 2;
+        ctx.beginPath();
+        for (let k = 0; k < 6; k++) {
+          const a = (Math.PI / 3) * k + Math.PI / 6;
+          ctx.lineTo(x + ox + Math.cos(a) * r * 0.9, y + Math.sin(a) * r * 0.9);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+    const t = toTexture(c);
+    t.repeat.set(6, 6);
+    return t;
+  });
+}
+
+// Шина: резина с надписью на боковине (u — вокруг колеса, v — по профилю).
+export function tyreSide() {
+  return cached('tyreSide', () => {
+    const W = 1024, H = 64, c = canvas(W, H), ctx = c.getContext('2d');
+    ctx.fillStyle = '#141414';
+    ctx.fillRect(0, 0, W, H);
+    // протектор (середина профиля) чуть темнее и с полосами износа
+    ctx.fillStyle = '#0e0e0e';
+    ctx.fillRect(0, H * 0.32, W, H * 0.36);
+    ctx.fillStyle = '#e6e6e6';
+    ctx.font = `800 ${Math.round(H * 0.16)}px system-ui, sans-serif`;
+    ctx.textBaseline = 'middle';
+    for (let k = 0; k < 3; k++) {
+      ctx.fillText('APEX TIRES · RACING SLICK', (W / 3) * k + 20, H * 0.12);
+      ctx.save();
+      ctx.translate((W / 3) * k + 20, H * 0.88);
+      ctx.scale(1, -1);
+      ctx.fillText('APEX TIRES · RACING SLICK', 0, 0);
+      ctx.restore();
+    }
+    const t = toTexture(c, { aniso: 4 });
+    t.wrapT = THREE.ClampToEdgeWrapping;
+    return t;
+  });
+}
+
 // Клетчатая полоса старта/финиша.
 export function checker() {
   return cached('checker', () => {

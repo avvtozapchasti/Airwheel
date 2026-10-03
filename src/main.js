@@ -9,7 +9,7 @@ import { KeyboardControl } from './control/keyboard.js';
 import { Graphics, hasWebGL2 } from './render/scene.js';
 import { CameraRig, FlyScript, CAMERA_NAMES } from './render/cameras.js';
 import { World } from './render/world.js';
-import { buildCarModel } from './render/carModel.js';
+import { buildCarModel, setHeadlightLevel, preloadCars, LIVERIES } from './render/carModel.js';
 import { Podium } from './render/podium.js';
 import { QualityManager } from './render/quality.js';
 import { Particles, emitFromCar, emitWallSparks } from './render/particles.js';
@@ -94,12 +94,14 @@ const quality = new QualityManager({
   },
   onAuto: (p, fps) => hud.message(`Графика: ${p.name.toLowerCase()} (FPS ${Math.round(fps)})`, 'info', 2.5),
 });
-const PLAYER = { name: 'Ты', code: 'ТЫ', color: '#ffb000' };
+const PLAYER = { name: 'Ты', code: 'ТЫ', color: '#ffb000' }; // цвет — по окраске машины
 const PENALTY_TEXT = { wall: 'Удар о стену', cut: 'Срезка', jump: 'Фальстарт', reset: 'Возврат на трассу', pit: 'Скорость в пит-лейне' };
 const URLP = new URLSearchParams(location.search);
 const AUTOPILOT = URLP.has('autopilot');
 
-const settings = loadSettings({ trackId: TRACKS[0].id, cls: 'gt3', laps: 3, assist: 'medium', difficulty: 'medium', graphics: 'auto', weather: 'dry', tires: 'medium', name: 'Игрок' });
+const settings = loadSettings({ trackId: TRACKS[0].id, cls: 'gt3', laps: 3, assist: 'medium', difficulty: 'medium', graphics: 'auto', weather: 'dry', tires: 'medium', name: 'Игрок', livery: 0 });
+if (!LIVERIES[settings.livery]) settings.livery = 0;
+PLAYER.color = LIVERIES[settings.livery].base;
 if (!['dry', 'rain', 'variable'].includes(settings.weather)) settings.weather = 'dry';
 if (!COMPOUNDS[settings.tires]) settings.tires = 'medium';
 if (URLP.has('weather')) settings.weather = URLP.get('weather');
@@ -174,7 +176,7 @@ function setClass(clsId) {
     game.model.root.removeFromParent();
     game.model.dispose();
   }
-  game.model = buildCarModel(game.spec, { color: 0xffb000, player: true });
+  game.model = buildCarModel(game.spec, { livery: LIVERIES[settings.livery], number: 27, player: true });
   game.model.setLodScale(lodScale);
   gfx.scene.add(game.model.root);
   world.attachHeadlight(game.model);
@@ -234,8 +236,14 @@ const onboarding = new Onboarding(screenEl, {
 const menu = new Menu(screenEl, {
   tracks: TRACKS,
   classes: CLASS_IDS.map((id) => CARS[id]),
+  liveries: LIVERIES,
   onChange: (s) => {
     saveSettings(s);
+    // окраска: сразу на машине (видна в облёте меню после старта)
+    if (game.model && game.model.livery?.id !== LIVERIES[s.livery]?.id) {
+      game.model.setLivery(LIVERIES[s.livery], 27);
+      PLAYER.color = LIVERIES[s.livery].base;
+    }
     if (quality.mode !== s.graphics) quality.setMode(s.graphics);
   },
   onStart: (format) => {
@@ -584,7 +592,7 @@ function finishRace() {
   const badges = [improved.includes('lap') && 'новый рекорд круга', improved.includes('finish') && 'лучший финиш на трассе'].filter(Boolean);
   // подиум: три лучших машины
   podium.show(
-    rows.slice(0, 3).map((r) => ({ spec: game.spec, color: r.color })),
+    rows.slice(0, 3).map((r) => ({ spec: game.spec, color: r.color, livery: r.player ? LIVERIES[settings.livery] : null })),
     gfx.scene.environment,
   );
   screenEl.classList.add('podium-mode');
@@ -785,7 +793,7 @@ function mpStartQuali(m) {
     onEvent: onSessionEvent,
   });
   S.start();
-  game.model.paint.color.set(mpPlayerColor());
+  game.model.setColor(mpPlayerColor());
   world.pit?.setBoxes([...bots.map((b) => b.color), mpPlayerColor()], 11);
   beginSession(S);
   rig.script = null;
@@ -836,7 +844,7 @@ function mpStartRace(m) {
     mdl.entryId = e.id;
     game.botModels.push(mdl);
   }
-  game.model.paint.color.set(me?.color || PLAYER.color);
+  game.model.setColor(me?.color || PLAYER.color);
   showBots(true);
   world.pit?.setBoxes(S.entries.map((e) => e.color), S.entries.indexOf(S.player));
   beginSession(S);
@@ -1147,7 +1155,7 @@ function tick(now, dt) {
   } else {
     if (car && (driving || app.state === 'paused')) {
       game.model.root.visible = true;
-      game.model.update(car, alpha);
+      game.model.update(car, alpha, dt, carEnv());
       const pos = game.model.root.position;
       rig.update(dt, { pos, heading: game.model.root.rotation.y, pitch: car.pitch, roll: car.roll, speed: speedOf(car), vmax: game.spec.vmax, shake: car.shake, dims: game.spec.dims, s: car.s }, game.track);
       gfx.followSun(pos);
@@ -1156,7 +1164,9 @@ function tick(now, dt) {
       rig.update(dt, { pos: gfx.camera.position, heading: 0, speed: 0 }, game.track);
       gfx.followSun(gfx.camera.position);
     }
-    for (const m of game.botModels) if (m.root.parent) m.update(m.bot, m.bot.isRemote ? 1 : alpha);
+    const cenv = carEnv();
+    setHeadlightLevel(cenv.night);
+    for (const m of game.botModels) if (m.root.parent) m.update(m.bot, m.bot.isRemote ? 1 : alpha, dt, cenv);
     const showCars = driving || app.state === 'paused';
     world.update(gfx.camera.position, {
       dt,
@@ -1202,7 +1212,7 @@ function tick(now, dt) {
       boost: car.boostOn,
       nearest,
     });
-    const wetNow = WET.uWet.value > 0.3;
+    const wetNow = (S?.wetness ?? 0) > 0.3; // брызги — только на реально мокрой трассе
     emitFromCar(fx, car, game.track, dt, { wet: wetNow, offType: game.track.def.env?.ground === 'sand' ? 'sand' : 'dust', f1: game.spec.id === 'f1' });
     // брызги за соперниками на мокром асфальте (только близкие к камере)
     if (wetNow && app.state === 'race') {
@@ -1291,6 +1301,12 @@ function updateHud(S, car, input, dt) {
     tower: S.tower(),
     cars: S.entries.map((e) => ({ x: S.carOf(e).x, z: S.carOf(e).z, color: e.color, player: e.isPlayer })),
   });
+}
+
+// Освещение машин: ночь/сумерки — ярче фары и задние фонари; мокро — дождевой огонь F1.
+function carEnv() {
+  const t = game.track?.def.env?.time;
+  return { night: t === 'night' || t === 'dusk', wet: WET.uWet.value > 0.35 && (game.session?.rain ?? 0) + (game.session?.wetness ?? 0) > 0.3 };
 }
 
 // Машины соперников (боты и игроки по сети) — для звука, брызг и пятен фар.
@@ -1446,6 +1462,15 @@ window.addEventListener('unhandledrejection', (e) => {
 window.airwheel = { app, game, gfx, world, rig, keyboard, hud, settings, formatTime, placeCar };
 
 function boot() {
+  // модели машин (GLB, meshopt) — в фоне; до загрузки работает процедурная копия
+  preloadCars(['gt3', 'f1'])
+    .then(() => {
+      if (!game.session) {
+        game.spec = null;
+        setClass(settings.cls);
+      }
+    })
+    .catch((e) => console.warn('[airwheel] модели машин', e));
   app.trackerReady = tracker.init();
   app.trackerReady.catch((e) => console.warn('Модель рук не загрузилась', e));
   onboarding.show('camera');

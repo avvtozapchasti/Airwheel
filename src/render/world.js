@@ -71,7 +71,7 @@ export class World {
     this.group = group;
     this.track = track;
     this.env = env;
-    this.night = env.time === 'night';
+    this.night = env.time === 'night' || env.time === 'dusk'; // в сумерках — фары и фонари
     this.lights = [...(trackGroup.userData.lights || []), ...(this.scenery.lights || []), ...(this.pit?.lights || [])];
     this.setStartLights = trackGroup.userData.setStartLights;
     this.gfx.scene.add(this.botPools);

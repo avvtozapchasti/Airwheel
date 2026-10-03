@@ -11,6 +11,9 @@ import { Weather } from '../src/game/weather.js';
 import ALPINE from '../src/game/tracks/alpine.js';
 import STREET from '../src/game/tracks/street.js';
 import COASTAL from '../src/game/tracks/coastal.js';
+import HARBOR from '../src/game/tracks/harbor.js';
+import DESERT from '../src/game/tracks/desert.js';
+import SAKURA from '../src/game/tracks/sakura.js';
 import { autopilotInput } from '../src/game/autopilot.js';
 import { DriveAnalyzer } from '../src/game/analyzer.js';
 import { placeCar } from '../src/game/physics.js';
@@ -19,6 +22,7 @@ import { RaceSession } from '../src/game/session.js';
 import { QualiSession } from '../src/game/quali.js';
 
 const TRACKS = [ALPINE, COASTAL, STREET];
+const NEW_TRACKS = [HARBOR, DESERT, SAKURA];
 
 let passed = 0;
 const queue = [];
@@ -67,6 +71,35 @@ for (const def of TRACKS) {
     const prof = speedProfile(tr, tr.racingLine, CARS.gt3);
     const zones = brakingPoints(tr, prof).filter((b) => b.vEntry - b.vMin > 8);
     assert.ok(zones.length >= 3, 'зон торможения: ' + zones.length);
+  });
+}
+
+for (const def of NEW_TRACKS) {
+  test(`${def.name}: замкнута, ширина по данным, ≥3 зон торможения, длинная прямая, пит-лейн; GT3 и F1 проходят без ударов`, () => {
+    const tr = build(def);
+    const gap = Math.hypot(tr.x[0] - tr.x[tr.n - 1], tr.z[0] - tr.z[tr.n - 1]);
+    assert.ok(gap < tr.ds * 1.5, 'шов ' + gap);
+    for (let i = 0; i < tr.n; i++) {
+      const w = tr.hw[i] * 2;
+      assert.ok(w >= (def.minWidth ?? 12) - 0.01 && w <= (def.maxWidth ?? 16) + 0.01, `ширина ${w} на ${i}`);
+    }
+    const prof = speedProfile(tr, tr.racingLine, CARS.gt3);
+    const zones = brakingPoints(tr, prof).filter((b) => b.vEntry - b.vMin > 8);
+    assert.ok(zones.length >= 3, 'зон торможения: ' + zones.length);
+    let run = 0, longest = 0;
+    for (let k = 0; k < 2 * tr.n; k++) {
+      run = Math.abs(tr.kappa[k % tr.n]) < 1 / 600 ? run + tr.ds : 0;
+      longest = Math.max(longest, run);
+    }
+    assert.ok(longest > 380, 'длинная прямая ' + longest.toFixed(0));
+    assert.ok(tr.pit && tr.pit.len > 250, 'пит-лейн');
+    for (const cls of ['gt3', 'f1']) {
+      const pr = speedProfile(tr, tr.racingLine, CARS[cls]);
+      const r = autopilot(tr, CARS[cls], pr, { laps: 1 });
+      assert.equal(r.lapTimes.length, 1, cls + ' круг');
+      assert.equal(r.walls, 0, cls + ' ударов');
+    }
+    console.log(`    ${(tr.length / 1000).toFixed(2)} км, прямая ${longest.toFixed(0)} м, зон торможения ${zones.length}, идеал GT3 ${prof.lapTime.toFixed(1)} с`);
   });
 }
 
@@ -428,7 +461,7 @@ function gestureDriver(def, cls, { assist = 0.65, laps = 2, seed = 1, pace = 0.9
 }
 
 test('жесты (задержка, дрожь рук, газ вкл/выкл): GT3 проходит трассы без разворотов, F1 — строже', () => {
-  for (const def of TRACKS) {
+  for (const def of [...TRACKS, ...NEW_TRACKS]) {
     const a = gestureDriver(def, 'gt3', { assist: 0.65 });
     const n = gestureDriver(def, 'gt3', { assist: 0 });
     assert.ok(a.done && n.done, def.name + ': доехал');

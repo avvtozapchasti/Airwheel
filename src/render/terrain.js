@@ -225,7 +225,7 @@ export function buildTerrain(track, env, grid, { cell = 10 } = {}) {
   geo.computeVertexNormals();
   geo.computeBoundingSphere();
 
-  const tex = { grass: TX.grass, sand: TX.sand, concrete: TX.concrete, dry: TX.dryGrass }[env.ground || 'grass']();
+  const tex = { grass: TX.grass, sand: TX.sand, concrete: TX.concrete, dry: TX.dryGrass, desert: TX.desertSand }[env.ground || 'grass']();
   const mat = new THREE.MeshStandardMaterial({
     map: tex.map,
     normalMap: tex.normalMap,

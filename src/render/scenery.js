@@ -6,6 +6,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { rng } from '../util/rng.js';
 import { fbm2 } from './terrain.js';
 import * as TX from './textures.js';
+import { buildExtraScenery } from './scenery2.js';
 
 const CHUNK = 400;
 
@@ -173,7 +174,7 @@ function buildPeaks(track, cfg, fogColor) {
   const b = track.bounds;
   const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
   const parts = [];
-  const rockC = new THREE.Color(0x5c6470), snowC = new THREE.Color(0xf4f7fb), haze = new THREE.Color(fogColor);
+  const rockC = new THREE.Color(cfg.color ?? 0x5c6470), snowC = new THREE.Color(0xf4f7fb), haze = new THREE.Color(fogColor);
   for (let k = 0; k < cfg.count; k++) {
     const a = (k / cfg.count) * Math.PI * 2 + r() * 0.3;
     const dist = cfg.dist[0] + r() * (cfg.dist[1] - cfg.dist[0]);
@@ -279,7 +280,7 @@ function buildCity(track, env, grid, heightAt, seaAt, r, density) {
   };
   // первый ряд — вдоль трассы, плотно; второй — высокие здания подальше (силуэт города)
   const stepFront = Math.max(1, Math.round(20 / track.ds));
-  for (let i = 0; i < track.n; i += stepFront) {
+  for (let i = 0; i < track.n && !cfg.back; i += stepFront) {
     if (inTunnel(i * track.ds)) continue;
     for (const side of [1, -1]) {
       if (r() > 0.85 * density + 0.1) continue;
@@ -489,7 +490,7 @@ export function buildScenery(track, env, grid, heightAt, { density = 1, seaAt = 
 
   // камни
   if (sc.rocks) {
-    const mat = new THREE.MeshStandardMaterial({ color: 0x8f8a82, vertexColors: true, roughness: 0.9, flatShading: true });
+    const mat = new THREE.MeshStandardMaterial({ color: sc.rocks.tint ?? 0x8f8a82, vertexColors: true, roughness: 0.9, flatShading: true });
     const set = new ChunkedInstances('rocks', rockGeo(3), null, mat, { shadows: true });
     const col = new THREE.Color();
     for (let k = 0; k < sc.rocks.count * density; k++) {
@@ -518,12 +519,19 @@ export function buildScenery(track, env, grid, heightAt, { density = 1, seaAt = 
   const seaGroup = buildSea(track, env, r);
   if (seaGroup) group.add(seaGroup);
   const water = seaGroup?.userData.water;
+  // порт, каньон, Япония, эстакады (scenery2.js)
+  const extra = buildExtraScenery(track, env, grid, heightAt, seaAt, density);
+  group.add(extra.group);
+  lights.push(...extra.lights);
+  let clock = 0;
 
   return {
     group,
     lights,
     update(camPos, lodScale = 1, dt = 0) {
+      clock += dt;
       for (const l of lods) l.update(camPos, lodScale);
+      extra.update(camPos, lodScale, clock);
       if (water) {
         water.offset.x += dt * 0.004;
         water.offset.y += dt * 0.006;

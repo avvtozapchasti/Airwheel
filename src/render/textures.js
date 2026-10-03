@@ -177,6 +177,13 @@ export const sand = () =>
     return [214 * k, 190 * k, 142 * k];
   });
 
+// Красный песок пустыни: рябь дюн и камешки.
+export const desertSand = () =>
+  paletteNoise('desertSand', 256, 6, 5, 33, (v, g) => {
+    const k = 0.82 + v * 0.32 + (g - 0.5) * 0.12;
+    return [222 * k, 150 * k, 100 * k];
+  });
+
 export const gravel = () =>
   paletteNoise('gravel', 256, 16, 3, 41, (v, g) => {
     const k = 0.7 + v * 0.3 + (g - 0.5) * 0.5;

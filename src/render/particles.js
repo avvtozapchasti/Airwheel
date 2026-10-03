@@ -8,6 +8,7 @@ const TYPES = {
   smoke: { life: 1.6, size: [1.2, 5.5], color: [0.82, 0.82, 0.84], alpha: 0.35, drag: 1.4, lift: 0.9, add: false },
   dust: { life: 1.3, size: [1.0, 4.5], color: [0.62, 0.5, 0.36], alpha: 0.4, drag: 1.2, lift: 0.5, add: false },
   sand: { life: 1.3, size: [1.0, 4.5], color: [0.86, 0.74, 0.52], alpha: 0.4, drag: 1.2, lift: 0.5, add: false },
+  gravel: { life: 1.0, size: [0.8, 3.2], color: [0.58, 0.55, 0.5], alpha: 0.45, drag: 1.0, lift: -2.0, add: false },
   spray: { life: 0.7, size: [0.6, 3.2], color: [0.72, 0.78, 0.86], alpha: 0.28, drag: 2.2, lift: 0.2, add: false },
   spark: { life: 0.45, size: [0.18, 0.05], color: [3.2, 1.9, 0.6], alpha: 1, drag: 0.4, lift: -9.8, add: true },
 };
@@ -164,12 +165,14 @@ export function emitFromCar(fx, car, track, dt, { wet = false, offType = 'dust',
       fx.emit('smoke', x, y, z, back[0], back[1], back[2], 1.5);
     }
   }
-  // пыль/песок из-под колёс вне трассы
+  // пыль, песок, камешки из-под колёс вне трассы (тип — из покрытия, surfaces.js)
   for (let w = 0; w < 4; w++) {
-    if (car.surfaces[w] !== 'grass' || v < 4) continue;
-    if (Math.random() < dt * 30) {
+    const dust = car.wheels?.[w]?.S?.dust;
+    if (!dust || v < 4) continue;
+    if (Math.random() < dt * (dust === 'gravel' ? 40 : 30)) {
       const [x, y, z] = wheel(w);
-      fx.emit(offType, x, y, z, back[0], back[1] + 0.6, back[2], 2);
+      const type = dust === 'dust' ? offType : dust;
+      fx.emit(type, x, y, z, back[0], back[1] + 0.6, back[2], 2);
     }
   }
   // брызги на мокром асфальте

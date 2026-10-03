@@ -144,6 +144,23 @@ export class Track {
     this.bounds = this.computeBounds();
     this.corners = this.findCorners((def.corners || []).map((c) => ({ ...c, t: (c.t - shift + 1) % 1 })));
     this.tShift = shift;
+
+    // --- покрытие за поребриком: по умолчанию трава (или runoffSurface трассы),
+    // снаружи медленных поворотов — гравийные ловушки (после 2 м травы) ---
+    this.runoffSurface = def.runoffSurface ?? 'grass';
+    this.gravelL = new Uint8Array(n);
+    this.gravelR = new Uint8Array(n);
+    const traps = def.gravel ?? (this.runoffSurface === 'grass' ? ['hairpin', 'turn90'] : []);
+    for (const c of this.corners) {
+      if (!traps.includes(c.type)) continue;
+      const arr = c.dir > 0 ? this.gravelR : this.gravelL; // снаружи поворота
+      const exitPad = m(55), entryPad = m(15);
+      for (let k = this.wrap(c.entry - entryPad), cnt = 0; cnt < n; k = this.wrap(k + 1), cnt++) {
+        arr[k] = 1;
+        if (k === this.wrap(c.exit + exitPad)) break;
+      }
+    }
+    this.pit = null; // пит-лейн (pit.js) подключается отдельно
     // мост: диапазон s и центр лагуны под ним
     if (def.bridge) {
       const w = (t) => ((((t - shift) % 1) + 1) % 1) * this.length;
@@ -315,11 +332,27 @@ export class Track {
     return !!b && (((s - b.s0) % this.length) + this.length) % this.length <= b.length;
   }
 
-  // Поверхность под точкой с боковым смещением d на индексе i.
+  // Поверхность под точкой с боковым смещением d на индексе i (см. surfaces.js).
   surfaceAt(i, d) {
     const a = Math.abs(d);
     if (a <= this.hw[i]) return 'asphalt';
-    if (a <= this.hw[i] + this.kerb[i]) return 'kerb';
-    return this.def.offSurface?.(i, this) ?? 'grass';
+    if (this.pit && this.pit.surfaceAt(i, d)) return 'pit';
+    const kerbEnd = this.hw[i] + this.kerb[i];
+    if (a <= kerbEnd) return 'kerb';
+    const custom = this.def.offSurface?.(i, this, d);
+    if (custom) return custom;
+    if (this.bridge && this.onBridge(i * this.ds)) return 'runoff'; // на мосту — бетонная обочина
+    if (a > kerbEnd + 2 && (d > 0 ? this.gravelL[i] : this.gravelR[i])) return 'gravel';
+    return this.runoffSurface;
+  }
+
+  // Близко ли стенка пит-лейна (для проверки столкновений).
+  nearPitWall(s, reach) {
+    return !!this.pit && this.pit.nearWall(s, reach);
+  }
+
+  // Стенка пит-лейна в точке s: {d} (смещение от центра в сторону пит-лейна) или null.
+  pitWallAt(s) {
+    return this.pit ? this.pit.wallAt(s) : null;
   }
 }

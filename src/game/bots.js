@@ -303,43 +303,71 @@ function overlap(A, B) {
   return { pen: best, nx: bestAx[0], nz: bestAx[1] }; // нормаль от A к B
 }
 
-// Игрок против ботов. Игрок теряет скорость, бот отскакивает вбок. Возвращает события.
+// Игрок против ботов: мягкое OBB-взаимодействие. Машины разводятся по нормали контакта,
+// обмениваются импульсом по массам (упругость e = 0.3) — без потери скорости «в ноль»:
+// догнал сзади — сам чуть замедлился, бот чуть ускорился; толкнул сбоку — оба смещаются.
+// Возвращает события.
 export function collidePlayer(player, bots, track) {
   const events = [];
   const D = player.spec.dims;
   for (const b of bots) {
+    if (b.inBox) continue; // стоит в боксе за стенкой пит-лейна
     if (Math.abs(track.deltaS(player.s, b.s)) > 8) continue;
     const A = obb(player.x, player.z, player.psi, D.length / 2, D.width / 2);
     const bd = b.spec.dims;
     const B = obb(b.x, b.z, b.psi, bd.length / 2, bd.width / 2);
     const hit = overlap(A, B);
     if (!hit) continue;
-    // разводим: игрока на 60%, бота на 40% (через боковое смещение)
-    player.x -= hit.nx * hit.pen * 0.6;
-    player.z -= hit.nz * hit.pen * 0.6;
-    const nLeft = track.nx[b.idx] * hit.nx + track.nz[b.idx] * hit.nz;
-    b.d += nLeft * hit.pen * 0.4;
-    // относительная скорость вдоль нормали
-    const sp = Math.sin(player.psi), cp = Math.cos(player.psi);
-    const pvx = player.u * sp + player.v * cp, pvz = player.u * cp - player.v * sp;
-    const bvx = b.v * Math.sin(b.psi), bvz = b.v * Math.cos(b.psi);
-    const rel = (pvx - bvx) * hit.nx + (pvz - bvz) * hit.nz; // > 0 — сближаемся
-    if (rel > 0) {
-      // игрок теряет скорость (сильнее при ударе сзади), бот отскакивает
-      const loss = clamp(0.08 + rel * 0.05, 0.08, 0.45);
-      player.u *= 1 - loss;
-      player.v *= 0.6;
-      player.r += (Math.random() - 0.5) * 0.6 * Math.min(1, rel / 5);
-      b.dVel += nLeft * Math.min(4, 1 + rel * 0.6);
-      const along = (bvx * hit.nx + bvz * hit.nz) < 0;
-      if (along) b.v *= 0.92;
-      else b.v = Math.min(b.v * 1.02, b.v + rel * 0.2);
+    const res = pushApart(player, hit, b.spec.mass, { vx: b.v * Math.sin(b.psi) + b.dVel * track.nx[b.idx], vz: b.v * Math.cos(b.psi) + b.dVel * track.nz[b.idx] });
+    // бот: смещение и импульс раскладываем вдоль трассы (прогресс, скорость) и поперёк (d, dVel)
+    const lx = track.nx[b.idx], lz = track.nz[b.idx], fx = track.tx[b.idx], fz = track.tz[b.idx];
+    b.d += (hit.nx * lx + hit.nz * lz) * res.otherShift;
+    b.progress += (hit.nx * fx + hit.nz * fz) * res.otherShift;
+    b.s = track.wrapS(b.progress);
+    if (res.j > 0) {
+      b.v = Math.max(0, b.v + res.otherDvx * Math.sin(b.psi) + res.otherDvz * Math.cos(b.psi));
+      b.dVel = clamp(b.dVel + res.otherDvx * lx + res.otherDvz * lz, -5, 5);
       if (b.hitCd <= 0) {
-        events.push({ type: 'contact', bot: b, speed: rel });
+        events.push({ type: 'contact', bot: b, speed: res.rel });
         b.hitCd = 0.5;
-        player.shake = Math.min(1, 0.3 + rel * 0.05);
       }
     }
   }
   return events;
 }
+
+// Разведение машины игрока и другой машины (бот или соперник по сети) по нормали контакта
+// hit = {nx, nz (от игрока к другой), pen} и обмен импульсом по массам.
+// Игроку изменения применяются сразу, для другой машины возвращаются: смещение и Δv.
+export function pushApart(car, hit, otherMass, other) {
+  const mA = car.spec.mass, mB = otherMass;
+  const wA = mB / (mA + mB), wB = mA / (mA + mB);
+  car.x -= hit.nx * hit.pen * wA;
+  car.z -= hit.nz * hit.pen * wA;
+  const sp = Math.sin(car.psi), cp = Math.cos(car.psi);
+  let vx = car.u * sp + car.v * cp, vz = car.u * cp - car.v * sp;
+  const rel = (vx - other.vx) * hit.nx + (vz - other.vz) * hit.nz; // > 0 — сближаемся
+  const out = { j: 0, rel: Math.max(0, rel), otherShift: hit.pen * wB, otherDvx: 0, otherDvz: 0 };
+  if (rel <= 0) return out;
+  const e = 0.3;
+  const J = ((1 + e) * rel) / (1 / mA + 1 / mB);
+  vx -= (J / mA) * hit.nx;
+  vz -= (J / mA) * hit.nz;
+  // немного трения по касательной (5% относительной скорости) и лёгкий ограниченный разворот
+  const tx = -hit.nz, tz = hit.nx;
+  const relT = (vx - other.vx) * tx + (vz - other.vz) * tz;
+  vx -= relT * 0.05 * tx;
+  vz -= relT * 0.05 * tz;
+  car.u = vx * sp + vz * cp;
+  car.v = vx * cp - vz * sp;
+  const lateral = cp * hit.nx - sp * hit.nz; // удар слева (+) или справа (−)
+  const fwd = sp * hit.nx + cp * hit.nz; // удар спереди (+) или сзади (−)
+  car.r = clamp(car.r - lateral * Math.sign(fwd || 1) * Math.min(0.35, rel * 0.03), -2.5, 2.5);
+  car.shake = Math.max(car.shake, Math.min(0.8, 0.2 + rel * 0.04));
+  out.j = J;
+  out.otherDvx = (J / mB) * hit.nx;
+  out.otherDvz = (J / mB) * hit.nz;
+  return out;
+}
+
+export { obb, overlap };

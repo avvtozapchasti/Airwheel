@@ -5,9 +5,10 @@ import { createCar, stepCar, respawn, speedOf } from './physics.js';
 import { LapTiming } from './timing.js';
 import { updateBots, collidePlayer } from './bots.js';
 
-export const PENALTY = { wall: 2, cut: 3, jump: 5 };
+export const PENALTY = { wall: 2, cut: 3, jump: 5, reset: 2, pit: 3 };
 export const POINTS = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1];
-const WALL_PENALTY_SPEED = 4.5; // м/с поперечной скорости — «удар», а не касание
+const WALL_PENALTY_SPEED = 7; // м/с скорости по нормали к стене — «удар», а не касание
+const STUCK_SEC = 4; // стоит вне трассы (< 5 км/ч) дольше — автоматический возврат со штрафом
 const CUT_SEC = 1.0; // все 4 колеса за линией трассы дольше — срезка
 const GAP_BIN = 10; // м — шаг отметок для разрывов
 
@@ -145,8 +146,10 @@ export class RaceSession {
       this.updateTiming(e);
       this.recordPass(e);
     }
-    if (p.car.stuckT > 3 || p.car.wrongWayT > 4) {
+    if (p.car.stuckT > STUCK_SEC || p.car.wrongWayT > 4) {
+      const stuck = p.car.stuckT > STUCK_SEC;
       respawn(p.car, this.track);
+      if (stuck && !p.finished) this.addPenalty(p, PENALTY.reset, 'reset');
       this.emit({ type: 'respawn', entry: p });
     }
     this.watchPosition(dt);

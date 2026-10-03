@@ -85,7 +85,7 @@ export class QualiSession {
     const events = stepCar(car, finishing ? { steer: 0, gas: false, brake: 0.3 } : input, dt, this.track, { assist: this.assist });
     this.lastPhysics = events;
     for (const e of events) this.emit({ ...e, entry: p });
-    if (car.stuckT > 3 || car.wrongWayT > 4) {
+    if (car.stuckT > 4 || car.wrongWayT > 4) {
       respawn(car, this.track);
       this.emit({ type: 'respawn' });
     }

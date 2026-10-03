@@ -2,12 +2,12 @@
 //  Низкая: без теней и bloom, pixelRatio 1, меньше объектов и огней.
 //  Средняя: тени 1024, bloom, FXAA.  Высокая: тени 2048, bloom, SMAA, размытие на скорости.
 // Авто: стартуем с высокой (на слабых устройствах — со средней) и понижаем, если средний FPS
-// за 3 секунды ниже 40. Цель — 45+ FPS вместе с распознаванием рук.
+// за 3 секунды ниже 45. Цель — 60 FPS вместе с распознаванием рук.
 import { presets } from './scene.js';
 
 const ORDER = ['low', 'medium', 'high'];
 const WINDOW = 3; // с
-const MIN_FPS = 40;
+const MIN_FPS = 45;
 
 export function weakDevice() {
   const coarse = window.matchMedia?.('(pointer: coarse)').matches;

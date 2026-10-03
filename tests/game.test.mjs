@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { Track } from '../src/game/track.js';
 import { computeRacingLine, speedProfile, brakingPoints, topSpeed } from '../src/game/profile.js';
 import { CARS } from '../src/game/cars.js';
-import { createCar, stepCar, STEP } from '../src/game/physics.js';
+import { createCar, stepCar, STEP, speedOf, maxSteer } from '../src/game/physics.js';
+import { rng } from '../src/util/rng.js';
 import ALPINE from '../src/game/tracks/alpine.js';
 import STREET from '../src/game/tracks/street.js';
 import COASTAL from '../src/game/tracks/coastal.js';
@@ -273,7 +274,166 @@ test('Coastal Sprint: 2 шпильки, 90° после самой быстро�
   }
 });
 
-test('графика: автоподбор понижает пресет, если средний FPS < 40 за 3 с', async () => {
+// --- блок A: столкновения, покрытия, управляемость ---
+// Машина рядом с левой стеной главной прямой Alpine, нос под углом angDeg к стене, 180 км/ч.
+function wallShot(cls, angDeg, v = 50) {
+  const tr = build(ALPINE);
+  const spec = CARS[cls];
+  const car = createCar(spec, tr, { s: 200, d: 0 });
+  const i0 = tr.index(200);
+  const a = (angDeg * Math.PI) / 180;
+  placeCar(car, tr, 200, tr.wallL[i0] - 1.6 - 2.3 * Math.sin(a));
+  car.psi = tr.heading[i0] + a;
+  car.u = v;
+  car.gear = Math.max(0, spec.gears.findIndex((g) => g > v));
+  const before = speedOf(car);
+  for (let k = 0; k < 240; k++) {
+    const ev = stepCar(car, { steer: 0, gas: false, brake: false }, STEP, tr, { assist: 0.65 });
+    const hit = ev.find((e) => e.type === 'wall');
+    if (hit) return { car, tr, hit, loss: 1 - speedOf(car) / before };
+  }
+  return { car, tr, hit: null, loss: 0 };
+}
+
+test('стена: скользящий удар почти без потерь, лобовой гасит большую часть скорости, но не всю', () => {
+  for (const cls of ['gt3', 'f1']) {
+    const g = wallShot(cls, 10), m = wallShot(cls, 45), h = wallShot(cls, 90);
+    assert.ok(g.hit && m.hit && h.hit, 'удар зафиксирован');
+    assert.ok(g.loss < 0.08, `${cls} 10°: потеря ${(g.loss * 100).toFixed(0)}%`);
+    assert.ok(m.loss > 0.2 && m.loss < 0.6, `${cls} 45°: потеря ${(m.loss * 100).toFixed(0)}%`);
+    assert.ok(h.loss > 0.5 && h.loss < 0.9, `${cls} 90°: потеря ${(h.loss * 100).toFixed(0)}% — не 100%`);
+    assert.ok(h.hit.strength > m.hit.strength && m.hit.strength > g.hit.strength, 'сила удара растёт с углом');
+    console.log(`    ${cls}: 10° −${(g.loss * 100).toFixed(0)}%, 45° −${(m.loss * 100).toFixed(0)}%, 90° −${(h.loss * 100).toFixed(0)}%`);
+  }
+});
+
+test('стена: не залипает — после лобового удара машина на газу уезжает вдоль трассы', () => {
+  const { car, tr } = wallShot('gt3', 90, 12);
+  const p0 = car.progress;
+  for (let k = 0; k < 120 * 4; k++) stepCar(car, { steer: 0, gas: true, brake: false }, STEP, tr, { assist: 0.65 });
+  assert.ok(car.progress - p0 > 15, 'проехал ' + (car.progress - p0).toFixed(1) + ' м');
+  assert.ok(speedOf(car) * 3.6 > 20, 'скорость ' + (speedOf(car) * 3.6).toFixed(0));
+});
+
+test('трава и гравий: всегда можно разогнаться, на скорости тормозит 10–15 км/ч в секунду, выезд обратно', () => {
+  const tr = build(ALPINE);
+  for (const [cls, surf] of [['gt3', 'grass'], ['f1', 'grass'], ['gt3', 'gravel']]) {
+    const spec = CARS[cls];
+    const car = createCar(spec, tr, { s: 150, d: tr.hw[tr.index(150)] + 6 });
+    if (surf === 'gravel') for (let i = 0; i < tr.n; i++) tr.gravelL[i] = 1;
+    stepCar(car, { steer: 0, gas: false, brake: false }, STEP, tr, {});
+    assert.equal(car.surfaces[0], surf);
+    for (let k = 0; k < 120 * 4; k++) stepCar(car, { steer: 0, gas: true, brake: false }, STEP, tr, { assist: 0.65 });
+    const v4 = car.u * 3.6;
+    assert.ok(v4 > (surf === 'grass' ? 40 : 25), `${cls} ${surf}: за 4 с с места ${v4.toFixed(0)} км/ч`);
+    if (surf === 'gravel') tr.gravelL.fill(0);
+  }
+  // накатом с 180 км/ч по траве: замедление от покрытия 10–15 км/ч в секунду (без учёта воздуха)
+  const car = createCar(CARS.gt3, tr, { s: 150, d: tr.hw[tr.index(150)] + 6 });
+  car.u = 50;
+  car.gear = 4;
+  const v0 = car.u;
+  for (let k = 0; k < 120; k++) stepCar(car, { steer: 0, gas: false, brake: false }, STEP, tr, {});
+  const air = (CARS.gt3.drag * 47 * 47) / CARS.gt3.mass;
+  const dec = ((v0 - car.u) - air) * 3.6;
+  assert.ok(dec > 10 && dec < 16, 'замедление на траве ' + dec.toFixed(1) + ' км/ч/с');
+  // и возвращается на асфальт
+  for (let k = 0; k < 120 * 5 && car.wheelsOut > 0; k++) {
+    const input = { steer: 0.35, gas: true, brake: false };
+    stepCar(car, input, STEP, tr, { assist: 0.65 });
+  }
+  assert.equal(car.wheelsOut, 0, 'вернулся на асфальт');
+  assert.ok(car.u > 20, 'не потерял скорость в ноль: ' + (car.u * 3.6).toFixed(0));
+});
+
+test('руль зависит от скорости: ~30° на месте, 3–5° на максимальной; рывок руля не срывает в занос', () => {
+  for (const cls of ['gt3', 'f1']) {
+    const spec = CARS[cls];
+    const lo = (maxSteer(spec, 3) * 180) / Math.PI, hi = (maxSteer(spec, topSpeed(spec)) * 180) / Math.PI;
+    assert.ok(lo > 24 && lo <= 30.5, `${cls} на месте ${lo.toFixed(1)}°`);
+    assert.ok(hi >= 3 && hi <= 5, `${cls} на максималке ${hi.toFixed(1)}°`);
+  }
+  // 200 км/ч по прямой, руль рывком в упор на 0.3 с и обратно — машина не разворачивается
+  const tr = build(ALPINE);
+  for (const cls of ['gt3', 'f1']) {
+    const car = createCar(CARS[cls], tr, { s: 100, d: 0 });
+    car.u = 55;
+    car.gear = 4;
+    let maxBeta = 0;
+    for (let k = 0; k < 120 * 3; k++) {
+      const t = k * STEP;
+      stepCar(car, { steer: t < 0.3 ? 1 : 0, gas: true, brake: false }, STEP, tr, { assist: 0.65 });
+      maxBeta = Math.max(maxBeta, Math.abs(car.beta));
+    }
+    assert.ok(maxBeta < 0.25, `${cls}: угол скольжения ${((maxBeta * 180) / Math.PI).toFixed(1)}°`);
+    assert.ok(Math.abs(car.r) < 0.15, `${cls}: успокоилась, r=${car.r.toFixed(2)}`);
+  }
+});
+
+test('столкновение с ботом: обмен импульсом, без остановки в ноль', () => {
+  const tr = build(ALPINE);
+  const spec = CARS.gt3;
+  const prof = speedProfile(tr, tr.racingLine, spec);
+  const [bot] = createBots(1, spec, tr, { seed: 5 });
+  const car = createCar(spec, tr, { s: 300, d: 0 });
+  car.u = 50;
+  bot.place(304.3, 0);
+  bot.v = 40;
+  bot.pose(0);
+  const ev = collidePlayer(car, [bot], tr);
+  assert.ok(ev.some((e) => e.type === 'contact'), 'контакт');
+  assert.ok(car.u > 40 && car.u < 50, 'игрок ' + (car.u * 3.6).toFixed(0) + ' км/ч');
+  assert.ok(bot.v > 40, 'бота подтолкнули: ' + (bot.v * 3.6).toFixed(0));
+  void prof;
+});
+
+// «Игрок с жестами»: видит трассу с задержкой 80 мс, руль дрожит (шум, 30 Гц), газ/тормоз — вкл/выкл.
+function gestureDriver(def, cls, { assist = 0.65, laps = 2, seed = 1, pace = 0.92 } = {}) {
+  const tr = build(def);
+  const spec = CARS[cls];
+  const prof = speedProfile(tr, tr.racingLine, spec);
+  const car = createCar(spec, tr, { s: 0, d: 0 });
+  const r = rng(seed);
+  const hist = [];
+  let t = 0, held = { steer: 0, gas: false, brake: false }, next = 0, spins = 0, inSpin = false, offs = 0, wasOff = false;
+  while (t < 400 && car.progress < laps * tr.length) {
+    if (t >= next) {
+      next += 1 / 30;
+      hist.push({ t, ...autopilotInput(car, tr, prof, spec, { assist, pace }) });
+      while (hist.length > 1 && hist[1].t <= t - 0.08) hist.shift();
+      const noise = (r() + r() + r() + r() + r() + r() - 3) * 0.06;
+      held = { steer: Math.max(-1, Math.min(1, hist[0].steer + noise)), gas: hist[0].gas, brake: hist[0].brake };
+    }
+    stepCar(car, held, STEP, tr, { assist });
+    t += STEP;
+    const b = Math.abs(car.beta);
+    if (b > 0.6 && !inSpin) {
+      spins++;
+      inSpin = true;
+    }
+    if (b < 0.17) inSpin = false;
+    const off = car.wheelsOut >= 2;
+    if (off && !wasOff) offs++;
+    wasOff = off;
+  }
+  return { spins, offs, t, done: car.progress >= laps * tr.length };
+}
+
+test('жесты (задержка, дрожь рук, газ вкл/выкл): GT3 проходит трассы без разворотов, F1 — строже', () => {
+  for (const def of TRACKS) {
+    const a = gestureDriver(def, 'gt3', { assist: 0.65 });
+    const n = gestureDriver(def, 'gt3', { assist: 0 });
+    assert.ok(a.done && n.done, def.name + ': доехал');
+    assert.equal(a.spins, 0, `${def.name} GT3 с помощью: разворотов ${a.spins}`);
+    assert.ok(a.offs <= 4, `${def.name} GT3 с помощью: вылетов ${a.offs} за 2 круга`);
+    assert.ok(n.spins + n.offs <= 6, `${def.name} GT3 без помощи: ошибок ${n.spins + n.offs} за 2 круга`);
+    const f = gestureDriver(def, 'f1', { assist: 0.65 });
+    assert.ok(f.done && f.spins === 0, `${def.name} F1 с помощью: разворотов ${f.spins}`);
+    console.log(`    ${def.name}: GT3 вылетов ${a.offs} (без помощи ${n.offs}, разворотов ${n.spins}), F1 вылетов ${f.offs}`);
+  }
+});
+
+test('графика: автоподбор понижает пресет, если средний FPS < 45 за 3 с', async () => {
   globalThis.window ??= { devicePixelRatio: 1, matchMedia: () => ({ matches: false }) };
   globalThis.document ??= { hidden: false };
   const { QualityManager } = await import('../src/render/quality.js');

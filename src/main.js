@@ -87,6 +87,7 @@ const quality = new QualityManager({
   onAuto: (p, fps) => hud.message(`Графика: ${p.name.toLowerCase()} (FPS ${Math.round(fps)})`, 'info', 2.5),
 });
 const PLAYER = { name: 'Ты', code: 'ТЫ', color: '#ffb000' };
+const PENALTY_TEXT = { wall: 'Удар о стену', cut: 'Срезка', jump: 'Фальстарт', reset: 'Возврат на трассу', pit: 'Скорость в пит-лейне' };
 const URLP = new URLSearchParams(location.search);
 const AUTOPILOT = URLP.has('autopilot');
 
@@ -117,6 +118,8 @@ const app = {
   fpsFrames: 0,
   fpsT: 0,
   hint: null,
+  debugT: 0,
+  debugFull: false,
 };
 
 // ---------- трасса, класс, соперники ----------
@@ -408,10 +411,11 @@ function onSessionEvent(e) {
       audio.crash(0.4 + e.speed * 0.1);
       break;
     case 'wall': {
+      // звук, искры и тряска — по силе удара (скорости по нормали к стене)
       const car = game.session?.playerCar;
       if (e.entry?.isPlayer && car) {
-        audio.crash(e.speed / 8);
-        emitWallSparks(fx, car, e.side, e.total || e.speed);
+        audio.crash(0.25 + (e.strength ?? e.speed / 40) * 1.3);
+        emitWallSparks(fx, car, e.side, 4 + e.speed * 1.2);
       }
       break;
     }
@@ -437,7 +441,7 @@ function onSessionEvent(e) {
       else hud.message(`Круг ${e.lap} · ${formatLap(e.time)}`);
       break;
     case 'penalty':
-      hud.message(e.reason === 'wall' ? `Удар о стену: +${e.sec} с` : e.reason === 'cut' ? `Срезка: +${e.sec} с` : `Фальстарт: +${e.sec} с`, 'bad', 2.5);
+      hud.message(`${PENALTY_TEXT[e.reason] || 'Штраф'}: +${e.sec} с`, 'bad', 2.5);
       break;
     case 'respawn':
       hud.message('Возврат на трассу', 'info', 1.5);
@@ -774,17 +778,35 @@ function tick(now, dt) {
   });
 
   if (!debugEl.classList.contains('hidden')) {
-    const info = gfx.renderer.info.render;
-    debugEl.textContent =
-      `режим: ${app.mode}  состояние: ${app.state}/${S?.state}  FPS: ${app.fps.toFixed(0)}  графика: ${quality.current.name}${quality.mode === 'auto' ? ' (авто)' : ''}\n` +
-      `draw calls: ${info.calls}  треугольников: ${info.triangles}\n` +
-      (car
-        ? `v: ${Math.round(speedOf(car) * KMH)} км/ч  s: ${car.s.toFixed(0)}  d: ${car.d.toFixed(2)}  δ: ${car.delta.toFixed(3)}\n` +
-          `недоворот: ${car.under.toFixed(2)}  снос: ${car.over.toFixed(2)}  ABS: ${car.abs}  пробукс: ${car.wheelspin}\n`
-        : '') +
-      `steer: ${input.steer.toFixed(2)}  газ: ${input.gas}  тормоз: ${input.brake}\n` +
-      `ошибки: ${errors.map((e) => e.id).join(', ')}  подсказка: ${app.hint?.id ?? '—'}`;
+    app.debugT -= dt;
+    if (app.debugT <= 0) {
+      app.debugT = 0.1; // 10 раз в секунду — текст в DOM не нагружает кадр
+      debugEl.textContent = debugText(S, car, input, errors);
+    }
   }
+}
+
+// Отладочная панель: ` — кратко, F3 — подробно (физика по колёсам).
+const WHEEL_NAMES = ['ПЛ', 'ПП', 'ЗЛ', 'ЗП'];
+const DEG = 180 / Math.PI;
+function debugText(S, car, input, errors) {
+  const info = gfx.renderer.info.render;
+  let t =
+    `FPS: ${app.fps.toFixed(0)}  draw calls: ${info.calls}  треугольников: ${(info.triangles / 1000).toFixed(0)}k  графика: ${quality.current.name}${quality.mode === 'auto' ? ' (авто)' : ''}\n` +
+    `режим: ${app.mode}  состояние: ${app.state}/${S?.state ?? '—'}  рук: ${input.handsVisible ?? '—'}\n` +
+    `руль: ${(input.steer || 0).toFixed(2)}  газ: ${+input.gas || 0}  тормоз: ${+input.brake || 0}  ошибки: ${errors.map((e) => e.id).join(', ') || '—'}  подсказка: ${app.hint?.id ?? '—'}\n`;
+  if (!car) return t;
+  t +=
+    `v: ${Math.round(speedOf(car) * KMH)} км/ч  передача: ${car.gear + 1}  s: ${car.s.toFixed(0)}  d: ${car.d.toFixed(2)}  покрытие: ${car.surfaceMain}\n` +
+    `δ: ${(car.delta * DEG).toFixed(1)}°  β: ${(car.beta * DEG).toFixed(1)}°  r: ${car.r.toFixed(2)}  ay: ${car.ay.toFixed(1)}  недоворот: ${car.under.toFixed(2)}  снос: ${car.over.toFixed(2)}\n` +
+    `TC: ${car.tc ? '●' : '○'}  ABS: ${car.abs ? '●' : '○'}  ESP: ${car.esp ? '●' : '○'}  помощь: ${ASSIST[settings.assist]}  шины ×${(car.tireGrip ?? 1).toFixed(2)}  штраф сцепл.: ${car.gripPenaltyT > 0 ? car.gripPenaltyT.toFixed(2) + ' с' : '—'}`;
+  if (app.debugFull) {
+    t += '\nколесо  покрытие      нагрузка   μ      увод    скольж.   Fx      Fy';
+    car.wheels.forEach((w, k) => {
+      t += `\n${WHEEL_NAMES[k].padEnd(7)} ${(w.S?.name ?? w.surface).padEnd(13)} ${w.load.toFixed(0).padStart(6)} Н  ${w.mu.toFixed(2)}  ${(w.slip * DEG).toFixed(1).padStart(5)}°  ${w.ratio.toFixed(3).padStart(6)}  ${w.fx.toFixed(0).padStart(6)}  ${w.fy.toFixed(0).padStart(6)}`;
+    });
+  }
+  return t;
 }
 
 function updateHud(S, car, input, dt) {
@@ -874,7 +896,17 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyK') toggleKeyboard();
   if (e.code === 'KeyM') toggleMute();
   if (e.code === 'KeyC') switchCamera();
-  if (e.code === 'Backquote') debugEl.classList.toggle('hidden');
+  if (e.code === 'Backquote' || e.code === 'F3') {
+    if (e.code === 'F3') e.preventDefault();
+    const full = e.code === 'F3';
+    // повторное нажатие той же клавиши — скрыть, другой — переключить режим
+    if (!debugEl.classList.contains('hidden') && app.debugFull === full) debugEl.classList.add('hidden');
+    else {
+      debugEl.classList.remove('hidden');
+      app.debugFull = full;
+      app.debugT = 0;
+    }
+  }
   if (e.code === 'Escape' || e.code === 'KeyP') {
     if (app.state === 'paused') resume();
     else pause();

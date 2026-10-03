@@ -1157,7 +1157,7 @@ function tick(now, dt) {
       game.model.root.visible = true;
       game.model.update(car, alpha, dt, carEnv());
       const pos = game.model.root.position;
-      rig.update(dt, { pos, heading: game.model.root.rotation.y, pitch: car.pitch, roll: car.roll, speed: speedOf(car), vmax: game.spec.vmax, shake: car.shake, dims: game.spec.dims, s: car.s }, game.track);
+      rig.update(dt, { pos, heading: game.model.root.rotation.y, pitch: car.pitch, roll: car.roll, speed: speedOf(car), vmax: game.spec.vmax, shake: car.shake, rumble: car.rumble, ax: car.ax, boost: car.boostOn, dims: game.spec.dims, s: car.s }, game.track);
       gfx.followSun(pos);
     } else {
       game.model.root.visible = false;
@@ -1175,7 +1175,11 @@ function tick(now, dt) {
       bots: app.state === 'race' || (app.state === 'paused' && app.pausedFrom === 'race') ? othersOf(S) : null,
       pit: pitView(S),
     });
-    gfx.setSpeedBlur(car && showCars ? Math.max(0, (speedOf(car) / game.spec.vmax - 0.55) * 1.6) : 0);
+    gfx.setSpeedBlur(car && showCars ? Math.max(0, (speedOf(car) / game.spec.vmax - 0.55) * 1.6) : 0, car && showCars ? game.model.root.position : null);
+    // глубина резкости — только в меню и на облёте решётки, не во время езды
+    const menuish = ['menu', 'mp', 'lobby', 'mp-wait', 'onboarding'].includes(app.state);
+    const gridFly = rig.script && S?.state === 'grid' && car;
+    gfx.setDof(menuish ? 0.7 : gridFly ? 0.55 : 0, gridFly ? gfx.camera.position.distanceTo(game.model.root.position) : 30);
     // погода: мокрый асфальт, капли, приглушённый свет
     const W = weatherView(S);
     WET.uWet.value += (W.visWet - WET.uWet.value) * Math.min(1, dt * 2);

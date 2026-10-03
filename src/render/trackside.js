@@ -217,7 +217,7 @@ export function buildTrackside(track, env, { heightAt = null, grid = null, night
       const y = edgeY(track, i, d) - 0.05;
       _q.setFromAxisAngle(up, r() * 6.28);
       tyreM.push(_m.compose(_p.set(x, y, z), _q, _s.set(1, 0.9 + r() * 0.2, 1)).clone());
-      tyreC.push(new THREE.Color(Math.round(k / 0.75) % 2 ? band : 0xffffff));
+      tyreC.push(new THREE.Color(Math.round(k / 0.74) % 2 ? band : 0xbdbdbd).multiplyScalar(0.8));
     }
   }
   if (tyreM.length) {

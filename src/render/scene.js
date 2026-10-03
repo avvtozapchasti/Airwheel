@@ -272,9 +272,9 @@ const FinalShader = {
 export function presets() {
   const dpr = window.devicePixelRatio || 1;
   return {
-    low: { id: 'low', name: 'Низкая', pixelRatio: 1, shadows: 0, post: false, bloom: false, ao: 0, aa: 'msaa', motionBlur: false, ca: false, dof: false, lodScale: 0.55, density: 0.45, terrainCell: 16, realLights: 2, farScale: 0.7 },
-    medium: { id: 'medium', name: 'Средняя', pixelRatio: Math.min(1.25, dpr), shadows: 1024, post: true, bloom: true, ao: 6, aa: 'fxaa', motionBlur: false, ca: false, dof: true, lodScale: 0.8, density: 0.75, terrainCell: 12, realLights: 5, farScale: 0.85 },
-    high: { id: 'high', name: 'Высокая', pixelRatio: Math.min(2, dpr), shadows: 2048, post: true, bloom: true, ao: 12, aa: 'smaa', motionBlur: true, ca: true, dof: true, lodScale: 1, density: 1, terrainCell: 10, realLights: 10, farScale: 1 },
+    low: { id: 'low', name: 'Низкая', pixelRatio: 1, shadows: 0, post: false, bloom: false, ao: 0, aa: 'msaa', motionBlur: false, ca: false, dof: false, lodScale: 0.55, density: 0.45, terrainCell: 16, realLights: 2, farScale: 0.7, carLod: 0.3 },
+    medium: { id: 'medium', name: 'Средняя', pixelRatio: Math.min(1.25, dpr), shadows: 1024, post: true, bloom: true, ao: 6, aa: 'fxaa', motionBlur: false, ca: false, dof: true, lodScale: 0.8, density: 0.75, terrainCell: 12, realLights: 5, farScale: 0.85, carLod: 0.7 },
+    high: { id: 'high', name: 'Высокая', pixelRatio: Math.min(2, dpr), shadows: 2048, post: true, bloom: true, ao: 12, aa: 'smaa', motionBlur: true, ca: true, dof: true, lodScale: 1, density: 1, terrainCell: 10, realLights: 10, farScale: 1, carLod: 1 },
   };
 }
 

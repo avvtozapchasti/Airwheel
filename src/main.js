@@ -79,6 +79,7 @@ window.addEventListener('resize', () => fx.setViewport(gfx.height));
 
 const IDLE = { steer: 0, gas: false, brake: false, nitro: false, errors: [] };
 let lodScale = 1;
+let carLod = 1; // дистанции LOD машин соперников (на «Низкой» — упрощённая модель раньше)
 // Пресеты графики: всё, что можно поменять на лету, применяется сразу; плотность объектов —
 // при следующей загрузке трассы.
 const quality = new QualityManager({
@@ -87,9 +88,11 @@ const quality = new QualityManager({
     gfx.applyFar();
     world.setRealLights(p.realLights);
     lodScale = p.lodScale;
+    carLod = p.carLod ?? p.lodScale;
     fx.setBudget(p.id === 'low' ? 0.4 : p.id === 'medium' ? 0.75 : 1);
     // вызывается после объявления app и game (quality.setMode ниже)
-    for (const m of [game.model, ...game.botModels]) m?.setLodScale(p.lodScale);
+    game.model?.setLodScale(p.lodScale);
+    for (const m of game.botModels) m.setLodScale(carLod);
     app.detectHz = p.id === 'low' ? 24 : 30;
   },
   onAuto: (p, fps) => hud.message(`Графика: ${p.name.toLowerCase()} (FPS ${Math.round(fps)})`, 'info', 2.5),
@@ -202,7 +205,7 @@ function spawnBots() {
   game.bots = createBots(11, game.spec, game.track, { difficulty: settings.difficulty, bps: game.bps });
   for (const b of game.bots) {
     const m = buildCarModel(game.spec, { color: b.color });
-    m.setLodScale(lodScale);
+    m.setLodScale(carLod);
     m.bot = b;
     game.botModels.push(m);
   }
@@ -839,7 +842,7 @@ function mpStartRace(m) {
   for (const e of S.entries) {
     if (e.isPlayer) continue;
     const mdl = buildCarModel(spec, { color: e.color });
-    mdl.setLodScale(lodScale);
+    mdl.setLodScale(carLod);
     mdl.bot = S.carOf(e);
     mdl.entryId = e.id;
     game.botModels.push(mdl);

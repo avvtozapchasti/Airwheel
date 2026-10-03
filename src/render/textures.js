@@ -811,6 +811,16 @@ export function helipad() {
   });
 }
 
+// Текстура из общего кэша (живёт между трассами) — её не освобождаем при смене трассы.
+export function isShared(t) {
+  if (t?.userData?.shared) return true;
+  for (const v of cache.values()) {
+    if (v === t) return true;
+    if (v && !v.isTexture && typeof v === 'object' && Object.values(v).includes(t)) return true;
+  }
+  return false;
+}
+
 export function disposeAll() {
   for (const v of cache.values()) {
     if (v?.isTexture) v.dispose();

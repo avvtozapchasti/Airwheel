@@ -624,13 +624,20 @@ export function buildTrackGroup(track, env, { heightAt = null, rubber = null } =
   return group;
 }
 
-// Освобождение GPU-ресурсов группы (при смене трассы). Текстуры из кэша живут дальше.
+// Освобождение GPU-ресурсов группы (при смене трассы). Текстуры из общего кэша живут дальше,
+// текстуры этой трассы (контейнеры, табло, следы шин) — освобождаются.
 export function disposeGroup(group) {
+  const texs = new Set();
   group.traverse((o) => {
     o.geometry?.dispose();
     const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
-    for (const m of mats) m.dispose();
+    for (const m of mats) {
+      for (const v of Object.values(m)) if (v?.isTexture) texs.add(v);
+      if (m.uniforms) for (const u of Object.values(m.uniforms)) if (u?.value?.isTexture) texs.add(u.value);
+      m.dispose();
+    }
     if (o.isInstancedMesh) o.dispose();
   });
+  for (const t of texs) if (!TX.isShared(t)) t.dispose();
   group.removeFromParent();
 }

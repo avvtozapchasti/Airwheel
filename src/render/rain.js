@@ -50,6 +50,7 @@ function puddleMask() {
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.anisotropy = 4;
+  t.userData.shared = true;
   WET.uPuddle.value = t;
   return t;
 }

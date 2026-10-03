@@ -119,10 +119,15 @@ export function buildingMaterial(night, { fogScale = 1, far = false } = {}) {
           vec3 em = texture(tFacadeE, vec3(vWinUv, vStyle.x)).rgb;
           // какие окна горят — своё у каждого здания; вдали — средняя яркость (без мерцания)
           vec2 cell = floor(vWinUv * vec2(8.0, 16.0));
-          float litFrac = 0.12 + 0.5 * fract(vStyle.y * 13.37);
-          float on = step(hash12(cell + vStyle.y * 117.0), litFrac);
-          float fw = fwidth(vWinUv.x * 8.0) + fwidth(vWinUv.y * 16.0);
-          on = mix(on, litFrac * 0.8, smoothstep(0.12, 0.5, fw));
+          // офисы и стекло: свет горит секциями этажа (по 4 окна), жилые дома — по окнам
+          float office = step(0.5, vStyle.x);
+          vec2 grp = mix(cell, vec2(floor(cell.x / 4.0), cell.y), office);
+          float litFrac = 0.08 + 0.38 * fract(vStyle.y * 13.37);
+          float on = step(hash12(grp + vStyle.y * 117.0), litFrac);
+          on *= mix(1.0, step(0.18, hash12(cell + 3.1)), office);
+          on *= mix(1.0, 0.7, step(2.5, vStyle.x)); // стеклянные башни — приглушённее
+          float fw = (fwidth(vWinUv.x * 8.0) + fwidth(vWinUv.y * 16.0)) * mix(1.0, 0.6, office);
+          on = mix(on, litFrac * 0.7, smoothstep(0.12, 0.5, fw));
           float shopOn = step(0.45, hash12(vec2(seg * 1.7, vStyle.y * 9.0)));
           vec3 shopE = mix(vec3(1.0, 0.72, 0.42), vec3(0.75, 0.88, 1.0), step(0.6, hash12(vec2(seg, vStyle.y * 31.0)))) * pane * shopOn * (0.2 + 0.35 * hash12(vec2(seg, 3.0)));
           totalEmissiveRadiance *= mix(em * on, shopE, shop) * wallK;

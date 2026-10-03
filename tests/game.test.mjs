@@ -6,6 +6,8 @@ import { computeRacingLine, speedProfile, brakingPoints, topSpeed } from '../src
 import { CARS } from '../src/game/cars.js';
 import { createCar, stepCar, STEP, speedOf, maxSteer } from '../src/game/physics.js';
 import { rng } from '../src/util/rng.js';
+// детерминированные тесты: Math.random с фиксированным seed (TEST_SEED — для проверки на разных)
+Math.random = rng(+(process.env.TEST_SEED || 20251003));
 import { compoundGrip, wearGrip, createTire, updateTire, COMPOUND_IDS } from '../src/game/tires.js';
 import { Weather } from '../src/game/weather.js';
 import ALPINE from '../src/game/tracks/alpine.js';
@@ -522,7 +524,7 @@ test('погода: «Переменная» — дождь на 1–2 круг�
 });
 
 // Водитель для теста пит-стопа: автопилот, на подъезде к пит-лейну — по пути въезда.
-function pitRace({ track = ALPINE, weather = 'dry', laps = 3, assist = 0.65, requestLap = 2, compound = 'wet', brakeForPit = true } = {}) {
+function pitRace({ track = ALPINE, weather = 'dry', laps = 3, assist = 0.65, requestLap = 2, compound = 'wet', brakeForPit = true, lineSpeed = 60 } = {}) {
   const tr = build(track);
   const spec = CARS.gt3;
   const prof = speedProfile(tr, tr.racingLine, spec);
@@ -538,11 +540,11 @@ function pitRace({ track = ALPINE, weather = 'dry', laps = 3, assist = 0.65, req
     const car = S.playerCar, p = S.player;
     if (p.timing.lap === requestLap && !p.pit.request && p.pit.windowOpen(car) && !p.pit.stops.length) p.pit.request = compound;
     const toPit = p.pit.request || p.pit.active;
-    let input = S.state === 'grid' ? { steer: 0, gas: false, brake: true } : autopilotInput(car, tr, prof, spec, { pace: 0.85, lineOffset: toPit && (p.pit.active || L.rel(car.s) > tr.length - 300) ? (k) => L.pathD(k * tr.ds) : null });
+    let input = S.state === 'grid' ? { steer: 0, gas: false, brake: true } : autopilotInput(car, tr, prof, spec, { pace: 0.85, lineOffset: toPit && (p.pit.active || L.rel(car.s) > tr.length - 300 || L.rel(car.s) < L.wallA + 20) ? (k) => L.pathD(k * tr.ds) : null });
     if (brakeForPit && p.pit.request && p.pit.phase === 'track') {
       const u = L.rel(car.s);
       const toLine = (u > L.len ? tr.length - u : -u) + L.limA;
-      if (speedOf(car) > Math.sqrt((60 / 3.6) ** 2 + 2 * 5 * Math.max(0, toLine - 8))) input = { ...input, gas: false, brake: true };
+      if (speedOf(car) > Math.sqrt((lineSpeed / 3.6) ** 2 + 2 * 5 * Math.max(0, toLine - 8))) input = { ...input, gas: false, brake: true };
     }
     S.step(STEP, input);
     if (p.pit.active && L.inLimitZone(car.s)) maxPitV = Math.max(maxPitV, speedOf(car));
@@ -566,7 +568,8 @@ test('пит-стоп игрока: въезд, 60 км/ч, остановка �
 });
 
 test('пит-лейн: превышение 60 км/ч на линии въезда — штраф +3 с и подсказка коуча', () => {
-  const { events } = pitRace({ assist: 0, brakeForPit: false, laps: 2 });
+  // тормозит, но не до 60, а только до ~110 км/ч на линии въезда
+  const { events } = pitRace({ assist: 0, lineSpeed: 110, laps: 2 });
   assert.ok(events.some((e) => e.type === 'penalty' && e.reason === 'pit' && e.sec === 3), 'штраф');
   const tr = build(ALPINE);
   const prof = speedProfile(tr, tr.racingLine, CARS.gt3);

@@ -344,7 +344,8 @@ export function updateBots(bots, ctx) {
     for (const o of view) {
       if (o.ref === b) continue;
       const gap = tr.deltaS(b.s, tr.wrapS(o.progress));
-      if (gap > 0 && gap < 35 && Math.abs(o.d - b.d) < 2.4 && gap < aheadGap) {
+      // машина впереди: шире коридор, если она смещается поперёк (въезд в пит-лейн, вылет)
+      if (gap > 0 && gap < 60 && Math.abs(o.d - b.d) < (o.v < b.v - 8 ? 3.6 : 2.4) && gap < aheadGap) {
         ahead = o;
         aheadGap = gap;
       }
@@ -363,7 +364,9 @@ export function updateBots(bots, ctx) {
       } else if (b.passT <= 0) {
         // едем следом, держим дистанцию
         const keep = b.style === 'aggressive' ? 6 : 9;
-        vT = Math.min(vT, ahead.v + (aheadGap - keep) * 0.6);
+        // успеть затормозить до машины впереди: v² ≤ v_ahead² + 2·a·(дистанция − запас)
+        const brakeV = Math.sqrt(Math.max(0, ahead.v * ahead.v + 2 * brakeAt(b.spec, b.v) * 0.7 * Math.max(0, aheadGap - keep)));
+        vT = Math.min(vT, ahead.v + (aheadGap - keep) * 0.6, brakeV);
       }
     }
     if (b.passT > 0) {
@@ -505,7 +508,8 @@ export function pushApart(car, hit, otherMass, other) {
   const out = { j: 0, rel: Math.max(0, rel), otherShift: hit.pen * wB, otherDvx: 0, otherDvz: 0 };
   if (rel <= 0) return out;
   const e = 0.3;
-  const J = ((1 + e) * rel) / (1 / mA + 1 / mB);
+  // импульс ограничен: контакт толкает, но не «выстреливает» машину (±6 м/с за удар)
+  const J = Math.min(((1 + e) * rel) / (1 / mA + 1 / mB), 6 * Math.min(mA, mB));
   vx -= (J / mA) * hit.nx;
   vz -= (J / mA) * hit.nz;
   // немного трения по касательной (5% относительной скорости) и лёгкий ограниченный разворот

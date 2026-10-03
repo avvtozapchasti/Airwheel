@@ -317,7 +317,7 @@ export class RaceSession {
     const car = e.car;
     const i = car.idx;
     const limit = this.track.hw[i] + this.track.kerb[i] + this.spec.dims.width / 2;
-    if (Math.abs(car.d) > limit && car.wheelsOut === 4 && !e.pit?.active) {
+    if (Math.abs(car.d) > limit && car.wheelsOut === 4 && !e.pit?.active && !this.track.pit?.surfaceAt(i, car.d)) {
       e.cutT += dt;
       if (e.cutT > CUT_SEC && !e.cutGiven) {
         e.cutGiven = true;

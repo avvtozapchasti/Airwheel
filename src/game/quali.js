@@ -154,7 +154,7 @@ export class QualiSession {
   judge(p, dt) {
     const car = p.car, i = car.idx;
     const limit = this.track.hw[i] + this.track.kerb[i] + this.spec.dims.width / 2;
-    if (Math.abs(car.d) > limit && car.wheelsOut === 4 && !p.pit.active) {
+    if (Math.abs(car.d) > limit && car.wheelsOut === 4 && !p.pit.active && !this.track.pit?.surfaceAt(i, car.d)) {
       p.cutT += dt;
       if (p.cutT > CUT_SEC && p.timing.valid) {
         p.timing.valid = false;

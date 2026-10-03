@@ -1024,7 +1024,8 @@ function readInput(now, dt) {
     if (S.state === 'grid') return { ...kb, gas: false, brake: true };
     // заказал пит-стоп — автопилот едет по пути въезда в пит-лейн
     const pit = S.player?.pit, L = game.track.pit;
-    const toPit = L && pit && (pit.request || pit.active) && (pit.active || L.rel(S.playerCar.s) > game.track.length - 300);
+    const u = L ? L.rel(S.playerCar.s) : 0;
+    const toPit = L && pit && (pit.request || pit.active) && (pit.active || u > game.track.length - 300 || u < L.wallA + 20);
     return { ...kb, ...autopilotInput(S.playerCar, game.track, game.prof, game.spec, { assist: ASSIST[settings.assist], lineOffset: toPit ? (k) => L.pathD(k * game.track.ds) : null }) };
   }
   if (app.mode === 'keyboard') return keyboard.update(dt);

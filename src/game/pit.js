@@ -90,7 +90,7 @@ export class PitLane {
     let x;
     if (u > this.len) {
       const line = (this.track.racingLine?.offset[this.track.index(s)] ?? 0) * this.side;
-      x = line + (edge - line) * smoothstep(this.track.length - 260, this.track.length - 70, u);
+      x = line + (edge - line) * smoothstep(this.track.length - 420, this.track.length - 90, u);
     }
     else if (u < TAPER_IN) x = edge + (this.fastD(s) - edge) * smoothstep(0, TAPER_IN, u);
     else if (u > this.len - TAPER_OUT) x = edge + (this.fastD(s) - edge) * (1 - smoothstep(this.len - TAPER_OUT, this.len, u));
@@ -217,7 +217,9 @@ export class PlayerPit {
 
     switch (this.phase) {
       case 'track':
-        if (inLane && u < L.wallA + 30) {
+        // заезд засчитывается там, где начинается разделительная стенка: до неё (сужение
+        // въезда) машина ещё может вернуться на трассу без ограничителя
+        if (inLane && u >= L.wallA - 5 && u < L.wallA + 30) {
           this.phase = 'lane';
           this.tIn = time;
           this.penalized = false;

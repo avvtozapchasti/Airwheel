@@ -24,14 +24,20 @@ export function autopilotInput(car, track, prof, spec, { assist = 0.65, pace = 0
   const headErr = wrap(lineHead - car.psi);
   // упреждение: кривизна линии чуть впереди (реакция машины ~0.15 с)
   const ia = track.index(car.s + u * (0.15 + react) + 2);
-  const kappa = line.kappa?.[ia] ?? track.kappa[ia];
+  let kappa = line.kappa?.[ia] ?? track.kappa[ia];
+  if (lineOffset) {
+    // свой путь (въезд в пит-лейн): кривизна центра + вторая производная смещения
+    const h2 = 4;
+    kappa = track.kappa[ia] + (off(track.wrap(ia + h2)) - 2 * off(ia) + off(track.wrap(ia - h2))) / (h2 * track.ds) ** 2;
+  }
   const L = spec.wheelbase;
   // упреждение: кинематика радиуса + запас на недостаточную поворачиваемость (usK, рад/(м/с²))
   const ff = Math.atan(L * kappa) + (spec.usK ?? 0) * u * u * kappa;
   // желаемый курс: на линию через точку в la метрах впереди; поворот к нему за ~0.5 с
-  const la = Math.max(8, u * (0.7 + react * 2));
+  // свой путь (въезд в пит-лейн) — перестроение резче: короче упреждение и быстрее поворот к линии
+  const la = Math.max(8, u * ((lineOffset ? 0.45 : 0.7) + react * 2));
   const psiErr = headErr - Math.atan(e / la);
-  const delta = ff + (L / (u * (0.5 + react * 2))) * psiErr - 0.3 * ((car.r - u * kappa) * L) / u;
+  const delta = ff + (L / (u * ((lineOffset ? 0.3 : 0.5) + react * 2))) * psiErr - 0.3 * ((car.r - u * kappa) * L) / u;
   const dMax = maxSteer(spec, Math.abs(car.u), spec.grip * (car.tireGrip ?? 1), assist);
   const vT = prof.v[track.index(car.s + car.u * (0.25 + react))] * pace;
   // физика смягчает руль около центра (|s|^expo) — здесь обратное преобразование

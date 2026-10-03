@@ -172,9 +172,11 @@ function profileSpeed(b, i) {
 }
 
 // Все машины на трассе в едином виде для логики соседей.
-function carsView(bots, player) {
+function carsView(bots, player, others = []) {
   const list = bots.map((b) => ({ ref: b, progress: b.progress, d: b.d, v: b.v, bot: true }));
   if (player) list.push({ ref: player, progress: player.progress, d: player.d, v: Math.max(0, player.u), bot: false });
+  // другие игроки по сети: боты их объезжают так же, как игрока
+  for (const o of others) if (o.ready && !o.inBox) list.push({ ref: o, progress: o.progress, d: o.d, v: o.v, bot: false });
   return list;
 }
 
@@ -267,7 +269,7 @@ export function updateBots(bots, ctx) {
   const { dt, player } = ctx;
   if (!bots.length) return;
   const tr = bots[0].track;
-  const view = carsView(bots, player);
+  const view = carsView(bots, player, ctx.others);
   const w = ctx.wetness ?? 0;
   for (const b of bots) {
     b.savePrev();

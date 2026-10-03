@@ -26,6 +26,10 @@ import { autopilotInput } from './game/autopilot.js';
 import { TRACKS, TRACK_BY_ID } from './game/tracks/index.js';
 import { AudioEngine } from './game/audio.js';
 import { Weather } from './game/weather.js';
+import { NetGame } from './net/netgame.js';
+import { NetRaceSession } from './net/netsession.js';
+import { LobbyUI } from './ui/lobby.js';
+import { qualiTime } from './game/bots.js';
 import { COMPOUNDS } from './game/tires.js';
 import { formatLap, formatTime, esc, plural } from './util/format.js';
 import { Hud } from './ui/hud.js';
@@ -95,7 +99,7 @@ const PENALTY_TEXT = { wall: 'Удар о стену', cut: 'Срезка', jump
 const URLP = new URLSearchParams(location.search);
 const AUTOPILOT = URLP.has('autopilot');
 
-const settings = loadSettings({ trackId: TRACKS[0].id, cls: 'gt3', laps: 3, assist: 'medium', difficulty: 'medium', graphics: 'auto', weather: 'dry', tires: 'medium' });
+const settings = loadSettings({ trackId: TRACKS[0].id, cls: 'gt3', laps: 3, assist: 'medium', difficulty: 'medium', graphics: 'auto', weather: 'dry', tires: 'medium', name: 'Игрок' });
 if (!['dry', 'rain', 'variable'].includes(settings.weather)) settings.weather = 'dry';
 if (!COMPOUNDS[settings.tires]) settings.tires = 'medium';
 if (URLP.has('weather')) settings.weather = URLP.get('weather');
@@ -248,6 +252,7 @@ const menu = new Menu(screenEl, {
     app.state = 'onboarding';
     onboarding.show('calibrate');
   },
+  onMultiplayer: () => openMultiplayer(),
 });
 
 function openMenu(message = '') {
@@ -503,11 +508,29 @@ function onSessionEvent(e) {
       hud.big('ФИНИШ!', 'gold');
       audio.finish();
       break;
+    case 'net-finish':
+      mp.net?.sendFinish(e.report);
+      hud.message('Ждём остальных…', 'info', 4);
+      break;
     case 'done':
-      if (app.state === 'quali') showQualiResults();
+      if (mp.inQuali) mpQualiDone();
+      else if (app.state === 'quali') showQualiResults();
       else finishRace();
       break;
   }
+}
+
+// Сетевая квалификация закончена: отправляем время хосту и ждём остальных.
+function mpQualiDone() {
+  const S = game.session;
+  mp.inQuali = false;
+  coach.stopRecording();
+  hud.big('');
+  hud.show(false);
+  coachEl.classList.remove('show');
+  app.state = 'mp-wait';
+  mp.net?.sendQualiTime(S?.best ?? null);
+  lobbyUI.showWait('Квалификация завершена', [S?.best ? `Твой лучший круг: <b>${formatLap(S.best)}</b>` : 'Засчитанного круга нет — стартуешь в конце.', 'Ждём остальных игроков, затем старт гонки…']);
 }
 
 function showQualiResults() {
@@ -587,6 +610,344 @@ function finishRace() {
   );
 }
 
+// ---------- мультиплеер ----------
+// Лобби по коду комнаты → (квалификация) → решётка → гонка → общий протокол от хоста.
+const mp = { net: null, lobby: null, inRace: false, inQuali: false, pending: null, hostBots: null, firstFinishT: null, qStart: 0 };
+const lobbyUI = new LobbyUI(screenEl, {
+  onCreate: (name) => mpCreate(name),
+  onJoin: (code, name) => mpJoin(code, name),
+  onBack: () => openMultiplayer(),
+  onSolo: () => {
+    leaveNet();
+    openMenu();
+  },
+  onReady: (on) => mp.net?.setReady(on),
+  onStart: () => mpHostStart(),
+  onLeave: () => {
+    leaveNet();
+    openMenu();
+  },
+  onSettings: (patch) => mp.net?.setSettings(patch),
+});
+
+function saveName(name) {
+  settings.name = String(name || '').trim().slice(0, 16) || 'Игрок';
+  saveSettings(settings);
+}
+
+function openMultiplayer(message = '') {
+  leaveNet();
+  openMenu();
+  menu.hide();
+  app.state = 'mp';
+  lobbyUI.showMenu({ name: settings.name, message });
+}
+
+function newNet() {
+  return new NetGame({
+    onLobby: (l) => mpOnLobby(l),
+    onStart: (m) => mpOnStart(m),
+    onResults: (rows) => mpShowResults(rows),
+    onError: (text) => mpError(text),
+    onPeerLeft: (p) => mpPeerLeft(p),
+    onToLobby: () => mpShowLobby(),
+  });
+}
+
+function leaveNet() {
+  mp.net?.leave();
+  mp.net = null;
+  mp.inRace = mp.inQuali = false;
+  mp.pending = null;
+  mp.hostBots = null;
+}
+
+function mpCreate(name) {
+  saveName(name);
+  leaveNet();
+  mp.net = newNet();
+  app.state = 'lobby';
+  mp.net.host(settings.name, { trackId: settings.trackId, cls: settings.cls, laps: settings.laps, weather: settings.weather, bots: true, quali: false, difficulty: settings.difficulty });
+}
+
+function mpJoin(code, name) {
+  saveName(name);
+  leaveNet();
+  mp.net = newNet();
+  if (mp.net.join(code, settings.name)) {
+    app.state = 'lobby';
+    lobbyUI.showConnecting(mp.net.code);
+  }
+}
+
+function mpOnLobby(l) {
+  mp.lobby = l;
+  // фон лобби — выбранная хостом трасса
+  if (l.settings?.trackId && TRACK_BY_ID[l.settings.trackId] && l.settings.trackId !== game.trackId && !mp.inRace && !mp.inQuali) {
+    loadTrack(l.settings.trackId);
+    rig.script = trackFlyover();
+  }
+  if (app.state === 'lobby' && mp.net?.state === 'lobby') mpShowLobby();
+}
+
+function mpShowLobby() {
+  if (!mp.net || !mp.lobby) return;
+  mp.inRace = mp.inQuali = false;
+  app.state = 'lobby';
+  game.session = null;
+  hud.show(false);
+  coachEl.classList.remove('show');
+  screenEl.classList.remove('podium-mode');
+  showBots(false);
+  if (!rig.script) rig.script = trackFlyover();
+  lobbyUI.showLobby(mp.lobby, { isHost: mp.net.isHost, myId: mp.net.myId, tracks: TRACKS, classes: CLASS_IDS.map((id) => CARS[id]), ping: mp.net.myPing(), keyboard: app.mode === 'keyboard' });
+}
+
+function mpError(text) {
+  const wasRacing = mp.inRace || mp.inQuali;
+  leaveNet();
+  openMenu();
+  menu.hide();
+  app.state = 'mp';
+  lobbyUI.showError(text);
+  if (wasRacing) hud.show(false);
+}
+
+function mpPlayerColor() {
+  return mp.lobby?.players.find((p) => p.id === mp.net?.myId)?.color || PLAYER.color;
+}
+
+// Хост: квалификация (если включена) или сразу гонка.
+function mpHostStart() {
+  const net = mp.net;
+  if (!net?.isHost || net.state !== 'lobby') return;
+  const seed = (Math.random() * 1e6) | 0;
+  mp.hostBots = null;
+  if (net.settings.quali) {
+    mp.qStart = performance.now();
+    net.start('quali', { seed, weatherSeed: (Math.random() * 1e6) | 0 });
+  } else net.start('race', mpRaceData(seed, null));
+}
+
+// Хост: боты на свободные места и порядок решётки (по квалификации или по темпу ботов).
+function mpRaceData(seed, qtimes) {
+  const net = mp.net, S = net.settings;
+  game.trackId === S.trackId || loadTrack(S.trackId);
+  setClass(S.cls);
+  const humans = net.players.map((p) => ({ id: p.id, kind: 'human', name: p.name, color: p.color, time: qtimes?.get(p.id) ?? null }));
+  const nb = S.bots ? Math.max(0, 12 - humans.length) : 0;
+  const bots = mp.hostBots || (nb ? createBots(nb, game.spec, game.track, { seed, difficulty: settings.difficulty, bps: game.bps }) : []);
+  mp.hostBots = bots;
+  const botRows = bots.map((b) => ({ id: b.code, kind: 'bot', name: b.name, color: b.color, time: b.qualiTime ?? null, pace: b.pace }));
+  let grid;
+  if (qtimes) grid = [...humans, ...botRows].sort((a, b) => (a.time ?? Infinity) - (b.time ?? Infinity));
+  else {
+    // без квалификации: боты по темпу, игроки — в середине решётки
+    grid = botRows.sort((a, b) => b.pace - a.pace);
+    humans.forEach((h, k) => grid.splice(Math.min(grid.length, 3 + k * 2), 0, h));
+  }
+  return { seed, holdT: 0.4 + Math.random() * 1.2, weatherSeed: (Math.random() * 1e6) | 0, grid: grid.map(({ id, kind, name, color, time }) => ({ id, kind, name, color, time })) };
+}
+
+// Старт этапа приходит заранее: ждём t0 по часам хоста (у всех одновременно).
+function mpOnStart(m) {
+  mp.pending = m;
+  app.state = 'mp-wait';
+  hud.show(false);
+  screenEl.classList.remove('podium-mode');
+  screenEl.innerHTML = `<div class="card loading"><h1>${m.stage === 'quali' ? 'Квалификация' : 'Гонка'} · ${esc(TRACK_BY_ID[m.settings.trackId]?.name ?? '')}</h1><p class="lead">Синхронизируем старт…</p></div>`;
+  screenEl.classList.remove('hidden');
+  try {
+    if (game.trackId !== m.settings.trackId) loadTrack(m.settings.trackId);
+    setClass(m.settings.cls);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function mpStartQuali(m) {
+  const net = mp.net;
+  clearBots();
+  const humans = mp.lobby?.players.length ?? 1;
+  const nb = net.isHost && m.settings.bots ? Math.max(0, 12 - humans) : 0;
+  const bots = nb ? createBots(nb, game.spec, game.track, { seed: m.seed, difficulty: settings.difficulty, bps: game.bps }) : [];
+  if (net.isHost) mp.hostBots = bots;
+  game.bots = bots;
+  const S = new QualiSession({
+    track: game.track,
+    spec: game.spec,
+    prof: game.profDry,
+    weather: new Weather(m.settings.weather, { seed: m.weatherSeed ?? m.seed, lapTime: game.profDry.lapTime * 1.08 }),
+    compound: settings.tires,
+    bots,
+    assist: ASSIST[settings.assist],
+    player: { name: settings.name, code: settings.name.slice(0, 3), color: mpPlayerColor() },
+    onEvent: onSessionEvent,
+  });
+  S.start();
+  game.model.paint.color.set(mpPlayerColor());
+  world.pit?.setBoxes([...bots.map((b) => b.color), mpPlayerColor()], 11);
+  beginSession(S);
+  rig.script = null;
+  app.state = 'quali';
+  mp.inQuali = true;
+  hud.message('Квалификация · 2 попытки', 'info', 2.5);
+}
+
+function mpStartRace(m) {
+  const net = mp.net;
+  clearBots();
+  net.remotes.clear();
+  const spec = game.spec;
+  const order = [];
+  const hostBots = [];
+  for (const g of m.grid) {
+    if (g.id === net.myId) order.push('player');
+    else if (g.kind === 'bot' && net.isHost) {
+      const b = mp.hostBots?.find((x) => x.code === g.id);
+      if (b) {
+        order.push(b);
+        hostBots.push(b);
+      }
+    } else order.push({ remote: net.remote(g.id, spec, game.track), id: g.id, name: g.name, color: g.color, human: g.kind === 'human' });
+  }
+  game.bots = hostBots;
+  const me = m.grid.find((g) => g.id === net.myId);
+  const S = new NetRaceSession({
+    track: game.track,
+    spec,
+    prof: game.profDry,
+    weather: new Weather(m.settings.weather, { seed: m.weatherSeed, lapTime: game.profDry.lapTime * 1.08 }),
+    compound: settings.tires,
+    laps: m.settings.laps,
+    assist: ASSIST[settings.assist],
+    player: { name: settings.name, code: settings.name.slice(0, 3), color: me?.color || PLAYER.color },
+    onEvent: onSessionEvent,
+    isHost: net.isHost,
+    holdT: m.holdT,
+  });
+  S.start(order);
+  S.player.id = net.myId;
+  for (const e of S.entries) {
+    if (e.isPlayer) continue;
+    const mdl = buildCarModel(spec, { color: e.color });
+    mdl.setLodScale(lodScale);
+    mdl.bot = S.carOf(e);
+    mdl.entryId = e.id;
+    game.botModels.push(mdl);
+  }
+  game.model.paint.color.set(me?.color || PLAYER.color);
+  showBots(true);
+  world.pit?.setBoxes(S.entries.map((e) => e.color), S.entries.indexOf(S.player));
+  beginSession(S);
+  rig.script = gridFlyover(S);
+  app.state = 'race';
+  app.format = 'race';
+  mp.inRace = true;
+  mp.firstFinishT = null;
+}
+
+function mpPeerLeft(p) {
+  const S = game.session;
+  if (mp.inRace && S?.entries) {
+    const e = S.entries.find((x) => x.id === p.id);
+    if (e && mp.net?.isHost && e.remote) {
+      const bot = S.convertToBot(e, { seed: (Math.random() * 1e5) | 0, difficulty: settings.difficulty, bps: game.bps });
+      const mdl = game.botModels.find((x) => x.entryId === p.id);
+      if (mdl && bot) mdl.bot = bot;
+      if (bot) game.bots.push(bot);
+    }
+    hud.message(`${p.name} отключился — машину ведёт бот`, 'info', 3);
+  }
+}
+
+// Каждый кадр: сеть, ожидание старта, жесты в лобби, итоги у хоста.
+function mpTick(dt, input, enter) {
+  const net = mp.net;
+  if (!net) return;
+  net.tick(dt, mp.inRace && game.session ? game.session : null);
+  if (!mp.net) return;
+  if (mp.pending && net.hostNow() >= mp.pending.t0) {
+    const m = mp.pending;
+    mp.pending = null;
+    try {
+      if (m.stage === 'quali') mpStartQuali(m);
+      else mpStartRace(m);
+    } catch (e) {
+      console.error(e);
+      mpError('Не удалось запустить сетевую гонку.');
+      return;
+    }
+  }
+  if (app.state === 'lobby' || app.state === 'mp') {
+    lobbyUI.update(input);
+    if (enter && lobbyUI.view === 'lobby') {
+      if (net.isHost) mpHostStart();
+      else lobbyUI.h.onReady(!lobbyUI.ready);
+    }
+  }
+  // хост: все прошли квалификацию (или 4 минуты) — решётка и гонка
+  if (net.isHost && net.state === 'quali' && !mp.pending) {
+    const all = net.players.every((p) => net.qtimes.has(p.id));
+    if (all || performance.now() - mp.qStart > 240000) net.start('race', mpRaceData((Math.random() * 1e6) | 0, net.qtimes));
+  }
+  // хост: все игроки финишировали (или минута после первого) — общий протокол
+  const S = game.session;
+  if (net.isHost && mp.inRace && S instanceof NetRaceSession) {
+    if (net.reports.size && mp.firstFinishT == null) mp.firstFinishT = performance.now();
+    const connected = new Set(net.players.map((p) => p.id));
+    const humans = S.entries.filter((e) => (e.isPlayer || e.human) && connected.has(e.id));
+    const done = humans.length > 0 && humans.every((e) => net.reports.has(e.id));
+    if (done || (mp.firstFinishT && performance.now() - mp.firstFinishT > 60000)) net.sendResults(S.finalRows(net.reports));
+  }
+}
+
+function mpShowResults(rows) {
+  const net = mp.net;
+  if (!net) return;
+  mp.inRace = false;
+  app.state = 'results';
+  coach.stopRecording();
+  hud.big('');
+  hud.show(false);
+  coachEl.classList.remove('show');
+  rig.script = null;
+  const list = rows.map((r) => ({ ...r, player: r.id === net.myId }));
+  const me = list.find((r) => r.player) || list[0];
+  podium.show(
+    list.slice(0, 3).map((r) => ({ spec: game.spec, color: r.color })),
+    gfx.scene.environment,
+  );
+  screenEl.classList.add('podium-mode');
+  const S = game.session;
+  showResults(
+    screenEl,
+    {
+      subtitle: `Сетевая гонка · ${game.track.name} · ${game.spec.name}`,
+      place: me.pos,
+      total: list.length,
+      time: me.time,
+      bestLap: me.bestLap,
+      lapTimes: S?.player?.timing.lapTimes ?? [],
+      penalty: me.penalty,
+      standings: list,
+      coach: coach.summary(),
+      keyboard: app.mode === 'keyboard',
+      extra: '',
+    },
+    {
+      onRetry: net.isHost ? () => net.backToLobby() : () => {},
+      onMenu: () => {
+        leaveNet();
+        openMenu();
+      },
+      retryLabel: net.isHost ? 'В лобби' : 'Ждём хоста…',
+      menuLabel: 'Выйти в меню',
+      retryDisabled: !net.isHost,
+    },
+  );
+}
+
 // ---------- пауза ----------
 function pause(reason) {
   if (app.state !== 'race' && app.state !== 'quali') return;
@@ -597,6 +958,25 @@ function pause(reason) {
       ? 'Подними обе открытые ладони к камере на 1 секунду, чтобы продолжить.'
       : 'Нажми Enter или пробел, чтобы продолжить.';
   const quali = app.pausedFrom === 'quali';
+  if (mp.net) {
+    screenEl.innerHTML = `
+    <div class="card">
+      <h1>⏸ Пауза</h1>
+      <p class="lead" id="pause-hint">${reason || ''}</p>
+      <p>Сетевая гонка продолжается — соперники не ждут. ${how}</p>
+      <div class="row">
+        <button class="btn primary" id="btn-resume">Продолжить</button>
+        <button class="btn" id="btn-menu">Выйти из гонки</button>
+      </div>
+    </div>`;
+    screenEl.classList.remove('hidden');
+    $('btn-resume').onclick = resume;
+    $('btn-menu').onclick = () => {
+      leaveNet();
+      openMenu();
+    };
+    return;
+  }
   screenEl.innerHTML = `
     <div class="card">
       <h1>⏸ Пауза</h1>
@@ -696,9 +1076,10 @@ function tick(now, dt) {
     const b = $('q-start');
     if (b) b.style.width = `${Math.round((input.startHold || 0) * 100)}%`;
     if (input.startTrigger || enter) startRace();
-  } else if (app.state === 'results' && input.startTrigger) startWeekend(app.format);
+  } else if (app.state === 'results' && input.startTrigger && !mp.net) startWeekend(app.format);
 
   quality.update(dt, !!driving);
+  mpTick(dt, input, enter);
 
   // физика с фиксированным шагом 120 Гц
   const physEvents = [];
@@ -775,13 +1156,13 @@ function tick(now, dt) {
       rig.update(dt, { pos: gfx.camera.position, heading: 0, speed: 0 }, game.track);
       gfx.followSun(gfx.camera.position);
     }
-    for (const m of game.botModels) if (m.root.parent) m.update(m.bot, alpha);
+    for (const m of game.botModels) if (m.root.parent) m.update(m.bot, m.bot.isRemote ? 1 : alpha);
     const showCars = driving || app.state === 'paused';
     world.update(gfx.camera.position, {
       dt,
       lodScale,
       focus: car && showCars ? car : { s: game.track.project(gfx.camera.position.x, gfx.camera.position.z, -1).s },
-      bots: app.state === 'race' || (app.state === 'paused' && app.pausedFrom === 'race') ? game.bots : null,
+      bots: app.state === 'race' || (app.state === 'paused' && app.pausedFrom === 'race') ? othersOf(S) : null,
       pit: pitView(S),
     });
     gfx.setSpeedBlur(car && showCars ? Math.max(0, (speedOf(car) / game.spec.vmax - 0.55) * 1.6) : 0);
@@ -798,7 +1179,7 @@ function tick(now, dt) {
   if (car && driving) {
     let nearest = null;
     if (app.state === 'race') {
-      for (const b of S.bots) {
+      for (const b of othersOf(S)) {
         const dx = b.x - car.x, dz = b.z - car.z;
         const dist = Math.hypot(dx, dz);
         if (!nearest || dist < nearest.dist) {
@@ -825,7 +1206,7 @@ function tick(now, dt) {
     emitFromCar(fx, car, game.track, dt, { wet: wetNow, offType: game.track.def.env?.ground === 'sand' ? 'sand' : 'dust', f1: game.spec.id === 'f1' });
     // брызги за соперниками на мокром асфальте (только близкие к камере)
     if (wetNow && app.state === 'race') {
-      for (const b of S.bots) {
+      for (const b of othersOf(S)) {
         if (b.v < 15 || Math.random() > dt * 18) continue;
         const dx = b.x - gfx.camera.position.x, dz = b.z - gfx.camera.position.z;
         if (dx * dx + dz * dz > 80 * 80) continue;
@@ -908,8 +1289,14 @@ function updateHud(S, car, input, dt) {
     laps: S.laps,
     neighbours: S.neighbours(),
     tower: S.tower(),
-    cars: S.entries.map((e) => ({ x: e.isPlayer ? e.car.x : e.bot.x, z: e.isPlayer ? e.car.z : e.bot.z, color: e.color, player: e.isPlayer })),
+    cars: S.entries.map((e) => ({ x: S.carOf(e).x, z: S.carOf(e).z, color: e.color, player: e.isPlayer })),
   });
+}
+
+// Машины соперников (боты и игроки по сети) — для звука, брызг и пятен фар.
+function othersOf(S) {
+  if (!S?.entries) return [];
+  return S.entries.filter((e) => !e.isPlayer).map((e) => S.carOf(e));
 }
 
 // Погода для рендера: влажность асфальта (ночные трассы всегда чуть влажные — блики) и дождь.
@@ -950,7 +1337,7 @@ function hudExtras(S, car) {
           keyboard: kb,
         }
       : null,
-    ping: null,
+    ping: mp.net && !mp.net.isHost ? mp.net.myPing() : null,
   });
 }
 
@@ -1042,6 +1429,9 @@ window.addEventListener('keydown', (e) => {
     else pause();
   }
 });
+
+// закрыли вкладку — корректно выходим из сетевой комнаты (остальные сразу узнают)
+window.addEventListener('pagehide', () => mp.net?.leave());
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) pause('Игра на паузе, пока вкладка скрыта.');

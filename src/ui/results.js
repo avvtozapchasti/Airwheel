@@ -43,8 +43,8 @@ function standingsTable(rows) {
 }
 
 // data: { subtitle, place, total, time, bestLap, lapTimes[], penalty, standings[], coach, keyboard, extra }
-// handlers: { onRetry, onMenu }
-export function showResults(root, data, { onRetry, onMenu }) {
+// handlers: { onRetry, onMenu, retryLabel?, menuLabel?, retryDisabled? }
+export function showResults(root, data, { onRetry, onMenu, retryLabel = 'Ещё раз', menuLabel = 'Другая трасса', retryDisabled = false }) {
   const medal = data.place === 1 ? '🥇' : data.place === 2 ? '🥈' : data.place === 3 ? '🥉' : '🏁';
   root.innerHTML = `
     <div class="card results wide">
@@ -62,8 +62,8 @@ export function showResults(root, data, { onRetry, onMenu }) {
       ${errorsBlock(data.coach)}
       ${data.extra || ''}
       <div class="row">
-        <button class="btn primary" data-act="retry">Ещё раз</button>
-        ${onMenu ? '<button class="btn" data-act="menu">Другая трасса</button>' : ''}
+        <button class="btn primary" data-act="retry" ${retryDisabled ? 'disabled' : ''}>${esc(retryLabel)}</button>
+        ${onMenu ? `<button class="btn" data-act="menu">${esc(menuLabel)}</button>` : ''}
       </div>
     </div>`;
   root.classList.remove('hidden');

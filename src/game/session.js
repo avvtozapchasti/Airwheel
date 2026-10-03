@@ -3,7 +3,7 @@
 // События наружу (звук, сообщения, HUD) — через колбэк onEvent({type, ...}).
 import { createCar, stepCar, respawn, speedOf } from './physics.js';
 import { LapTiming } from './timing.js';
-import { updateBots, collidePlayer, botStartTires } from './bots.js';
+import { updateBots, collidePlayer, botStartTires, obb, overlap, pushApart } from './bots.js';
 import { createTire, updateTire, suggestCompound } from './tires.js';
 import { PlayerPit } from './pit.js';
 import { autopilotInput } from './autopilot.js';
@@ -141,6 +141,24 @@ export class RaceSession {
           timing: new LapTiming(tr.length, { overall: this.overall }),
         });
         this.entries.push(this.player);
+      } else if (who.remote) {
+        // машина другого игрока (или бота хоста) по сети — положение приходит снимками
+        const rc = who.remote;
+        rc.progress = slot.s;
+        this.entries.push(
+          entryBase({
+            id: who.id,
+            isPlayer: false,
+            isRemote: true,
+            human: !!who.human,
+            name: who.name,
+            code: (who.code || who.name).slice(0, 3).toUpperCase(),
+            color: who.color,
+            remote: rc,
+            grid: k + 1,
+            timing: new LapTiming(tr.length, { overall: this.overall }),
+          }),
+        );
       } else {
         who.place(slot.s, slot.d);
         who.pit.box = k;
@@ -159,6 +177,7 @@ export class RaceSession {
       }
     });
     this.bots = this.entries.filter((e) => e.bot).map((e) => e.bot);
+    this.remotes = this.entries.filter((e) => e.remote);
     botStartTires(this.bots, this.weather?.mode ?? 'dry', this.laps);
     const box = this.entries.indexOf(this.player);
     this.player.pit = new PlayerPit(tr.pit, box, { emit: (e) => this.onPit(this.player, e), prof: this.opts.prof });
@@ -168,7 +187,7 @@ export class RaceSession {
     this.warnedRain = this.warnedStart = this.warnedStop = false;
     this.phaseT = -(this.opts.intro ?? 3.4); // панорама решётки до огней
     this.lights = 0;
-    this.holdT = 0.4 + Math.random() * 1.2; // пауза перед «огни погасли»
+    this.holdT = this.opts.holdT ?? 0.4 + Math.random() * 1.2; // пауза перед «огни погасли»
     this.jumped = false;
     this.state = 'grid';
     this.lastPos = this.player.grid;
@@ -179,7 +198,32 @@ export class RaceSession {
   }
 
   progressOf(e) {
-    return e.isPlayer ? e.car.progress : e.bot.progress;
+    return e.isPlayer ? e.car.progress : e.remote ? e.remote.progress : e.bot.progress;
+  }
+
+  // Объект с положением машины записи (для карты, звука, рендера).
+  carOf(e) {
+    return e.isPlayer ? e.car : e.remote || e.bot;
+  }
+
+  // Столкновения машины игрока: боты (импульс по массам) и машины по сети — свою машину
+  // толкаем импульсом, чужую только визуально (её симулирует её владелец).
+  collideOthers(p, events) {
+    for (const ev of collidePlayer(p.car, this.bots, this.track)) events.push(ev);
+    const car = p.car, D = car.spec.dims;
+    for (const e of this.remotes) {
+      const rc = e.remote;
+      if (!rc.ready || rc.inBox || Math.abs(this.track.deltaS(car.s, rc.s)) > 8) continue;
+      const hit = overlap(obb(car.x, car.z, car.psi, D.length / 2, D.width / 2), obb(rc.x, rc.z, rc.psi, D.length / 2, D.width / 2));
+      if (!hit) continue;
+      const res = pushApart(car, hit, this.spec.mass, { vx: Math.sin(rc.psi) * rc.v, vz: Math.cos(rc.psi) * rc.v });
+      rc.push.x += hit.nx * res.otherShift;
+      rc.push.z += hit.nz * res.otherShift;
+      if (res.j > 0 && rc.hitCd <= 0) {
+        rc.hitCd = 0.5;
+        events.push({ type: 'contact', speed: res.rel });
+      }
+    }
   }
 
   lapTimeOf(e) {
@@ -220,7 +264,7 @@ export class RaceSession {
     const control = p.finished ? { steer: 0, gas: false, brake: 0.4 } : input;
     const events = this.stepPlayer(p, control, dt);
     updateBots(this.bots, this.botCtx(dt, p));
-    for (const ev of collidePlayer(p.car, this.bots, this.track)) events.push(ev);
+    this.collideOthers(p, events);
     this.lastPhysics = events;
     for (const e of events) this.emit({ ...e, entry: p });
     if (!p.finished) this.judge(p, events, dt);
@@ -237,14 +281,20 @@ export class RaceSession {
     this.watchPosition(dt);
     if (this.state === 'finished') {
       this.finishT -= dt;
-      if (this.finishT <= 0) this.complete();
+      if (this.finishT <= 0) this.onFinishWait();
     }
+  }
+
+  // После финиша игрока: в одиночной игре — досчитать остальных и показать итоги.
+  onFinishWait() {
+    this.complete();
   }
 
   botCtx(dt, p) {
     return {
       dt,
       player: p.car,
+      others: this.remotes?.filter((e) => e.human).map((e) => e.remote) ?? [],
       raceTime: this.time,
       started: true,
       wetness: this.wetness,
@@ -428,8 +478,8 @@ export class RaceSession {
         gapText: k === 0 ? '' : `+${(total - wTotal).toFixed(3)}`,
         bestLap: e.timing.bestLap,
         penalty: e.penalty,
-        pits: e.isPlayer ? e.pit.stops.length : e.bot.pitStops.length,
-        pitLoss: e.isPlayer ? e.pit.lossTotal : e.bot.pitStops.reduce((a, x) => a + x.loss, 0),
+        pits: e.isPlayer ? e.pit.stops.length : e.bot ? e.bot.pitStops.length : e.report?.pits ?? 0,
+        pitLoss: e.isPlayer ? e.pit.lossTotal : e.bot ? e.bot.pitStops.reduce((a, x) => a + x.loss, 0) : e.report?.pitLoss ?? 0,
         points: POINTS[k] || 0,
         grid: e.grid,
         fastest: this.fastest?.entry === e,
@@ -439,6 +489,6 @@ export class RaceSession {
   }
 
   speedOf(e) {
-    return e.isPlayer ? speedOf(e.car) : e.bot.v;
+    return e.isPlayer ? speedOf(e.car) : e.remote ? e.remote.v : e.bot.v;
   }
 }

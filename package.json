@@ -8,13 +8,14 @@
     "build": "vite build",
     "preview": "vite preview",
     "postinstall": "node scripts/copy-wasm.js",
-    "test": "node tests/coach.test.mjs && node tests/game.test.mjs"
+    "test": "node tests/coach.test.mjs && node tests/game.test.mjs && node tests/net.test.mjs"
   },
   "devDependencies": {
     "vite": "^8.3.1"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",
-    "three": "^0.186.1"
+    "three": "^0.186.1",
+    "trystero": "^0.25.4"
   }
 }

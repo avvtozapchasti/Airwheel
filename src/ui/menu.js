@@ -109,6 +109,7 @@ export class Menu {
         <div class="row">
           <button class="btn primary" id="mn-weekend">▶ Квалификация и гонка</button>
           <button class="btn" id="mn-race">Сразу гонка</button>
+          <button class="btn" id="mn-mp">👥 Мультиплеер</button>
           ${keyboard ? '<button class="btn" id="mn-cam">📷 Камера</button>' : '<button class="btn" id="mn-cal">Перекалибровать</button>'}
         </div>
       </div>`;
@@ -127,6 +128,7 @@ export class Menu {
     });
     q('#mn-weekend').onclick = () => this.h.onStart('weekend');
     q('#mn-race').onclick = () => this.h.onStart('race');
+    q('#mn-mp').onclick = () => this.h.onMultiplayer?.();
     if (q('#mn-cam')) q('#mn-cam').onclick = () => this.h.onCamera();
     if (q('#mn-cal')) q('#mn-cal').onclick = () => this.h.onCalibrate();
   }

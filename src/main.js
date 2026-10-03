@@ -13,6 +13,7 @@ import { buildCarModel } from './render/carModel.js';
 import { Podium } from './render/podium.js';
 import { QualityManager } from './render/quality.js';
 import { Particles, emitFromCar, emitWallSparks } from './render/particles.js';
+import { RainSystem, WET } from './render/rain.js';
 import { Track } from './game/track.js';
 import { computeRacingLine, speedProfile, brakingPoints } from './game/profile.js';
 import { CARS, CLASS_IDS } from './game/cars.js';
@@ -24,6 +25,8 @@ import { DriveAnalyzer } from './game/analyzer.js';
 import { autopilotInput } from './game/autopilot.js';
 import { TRACKS, TRACK_BY_ID } from './game/tracks/index.js';
 import { AudioEngine } from './game/audio.js';
+import { Weather } from './game/weather.js';
+import { COMPOUNDS } from './game/tires.js';
 import { formatLap, formatTime, esc, plural } from './util/format.js';
 import { Hud } from './ui/hud.js';
 import { Menu, ASSIST } from './ui/menu.js';
@@ -66,6 +69,7 @@ const world = new World(gfx);
 const hud = new Hud($('hud'));
 const podium = new Podium();
 const fx = new Particles(gfx.scene);
+const rain = new RainSystem(gfx.scene);
 fx.setViewport(gfx.height);
 window.addEventListener('resize', () => fx.setViewport(gfx.height));
 
@@ -91,7 +95,10 @@ const PENALTY_TEXT = { wall: 'Удар о стену', cut: 'Срезка', jump
 const URLP = new URLSearchParams(location.search);
 const AUTOPILOT = URLP.has('autopilot');
 
-const settings = loadSettings({ trackId: TRACKS[0].id, cls: 'gt3', laps: 3, assist: 'medium', difficulty: 'medium', graphics: 'auto' });
+const settings = loadSettings({ trackId: TRACKS[0].id, cls: 'gt3', laps: 3, assist: 'medium', difficulty: 'medium', graphics: 'auto', weather: 'dry', tires: 'medium' });
+if (!['dry', 'rain', 'variable'].includes(settings.weather)) settings.weather = 'dry';
+if (!COMPOUNDS[settings.tires]) settings.tires = 'medium';
+if (URLP.has('weather')) settings.weather = URLP.get('weather');
 if (!TRACK_BY_ID[settings.trackId]) settings.trackId = TRACKS[0].id;
 if (!CARS[settings.cls]) settings.cls = 'gt3';
 if (URLP.has('laps')) settings.laps = Math.max(1, Math.min(10, +URLP.get('laps') || 3));
@@ -127,8 +134,11 @@ const game = {
   track: null,
   trackId: null,
   spec: null,
-  prof: null,
+  prof: null, // профиль для коуча — смесь сухого и мокрого по сцеплению шин
+  profDry: null,
+  profWet: null,
   bps: null,
+  weather: null,
   session: null,
   model: null,
   analyzer: null,
@@ -152,8 +162,10 @@ function loadTrack(id) {
 function setClass(clsId) {
   if (game.spec?.id === clsId && game.prof) return;
   game.spec = CARS[clsId];
-  game.prof = speedProfile(game.track, game.track.racingLine, game.spec);
-  game.bps = brakingPoints(game.track, game.prof);
+  game.profDry = speedProfile(game.track, game.track.racingLine, game.spec);
+  game.profWet = speedProfile(game.track, game.track.racingLine, game.spec, { gripK: 0.64 });
+  game.prof = { v: new Float32Array(game.profDry.v), lapTime: game.profDry.lapTime, vTop: game.profDry.vTop };
+  game.bps = brakingPoints(game.track, game.profDry);
   if (game.model) {
     game.model.root.removeFromParent();
     game.model.dispose();
@@ -306,8 +318,22 @@ function startWeekend(format) {
   }, 30);
 }
 
+// Профиль скорости для коуча: смесь сухого и мокрого по текущему сцеплению шин игрока.
+function blendProfile(grip) {
+  const f = Math.max(-0.1, Math.min(1.2, (1 - grip) / 0.36));
+  const P = game.prof, D = game.profDry.v, W = game.profWet.v;
+  for (let i = 0; i < P.v.length; i++) P.v[i] = D[i] + (W[i] - D[i]) * f;
+}
+
+function newWeather() {
+  game.weather = new Weather(settings.weather, { seed: (Math.random() * 1e6) | 0, lapTime: game.profDry.lapTime * 1.08 });
+  return game.weather;
+}
+
 function beginSession(S) {
   game.session = S;
+  blendProfile(1);
+  app.blendT = 0;
   fx.clear();
   game.analyzer = new DriveAnalyzer(game.track, game.prof, game.bps, game.spec);
   app.acc = 0;
@@ -326,13 +352,16 @@ function startQuali() {
   const S = new QualiSession({
     track: game.track,
     spec: game.spec,
-    prof: game.prof,
+    prof: game.profDry,
+    weather: newWeather(),
+    compound: settings.tires,
     bots: game.bots,
     assist: ASSIST[settings.assist],
     player: PLAYER,
     onEvent: onSessionEvent,
   });
   S.start();
+  world.pit?.setBoxes([...game.bots.map((b) => b.color), PLAYER.color], 11);
   beginSession(S);
   rig.script = null;
   app.state = 'quali';
@@ -344,12 +373,16 @@ function startRace() {
   const S = new RaceSession({
     track: game.track,
     spec: game.spec,
+    prof: game.profDry,
+    weather: newWeather(),
+    compound: settings.tires,
     laps: settings.laps,
     assist: ASSIST[settings.assist],
     player: PLAYER,
     onEvent: onSessionEvent,
   });
   S.start(game.grid);
+  world.pit?.setBoxes(S.entries.map((e) => e.color), S.entries.indexOf(S.player));
   beginSession(S);
   rig.script = gridFlyover(S);
   app.state = 'race';
@@ -445,6 +478,23 @@ function onSessionEvent(e) {
       break;
     case 'respawn':
       hud.message('Возврат на трассу', 'info', 1.5);
+      break;
+    case 'weather':
+      if (e.kind === 'rain-soon') hud.message('🌧 Дождь через 1 круг', 'info', 3.5);
+      else if (e.kind === 'rain') hud.message('🌧 Дождь! Трасса намокает', 'bad', 3);
+      else if (e.kind === 'stop') hud.message('☀ Дождь закончился — трасса сохнет', 'info', 3);
+      break;
+    case 'pit-enter':
+      hud.message('Пит-лейн · 60 км/ч', 'info', 2);
+      break;
+    case 'pit-stop':
+      audio.ok();
+      break;
+    case 'pit-done':
+      audio.lap();
+      break;
+    case 'pit-exit':
+      if (!e.drive) hud.message(`Пит-стоп · ${COMPOUNDS[e.compound]?.name ?? ''} · потеряно ${e.loss.toFixed(1)} с`, 'good', 3);
       break;
     case 'quali-end':
       hud.big('КВАЛИФИКАЦИЯ', 'gold');
@@ -584,7 +634,10 @@ function readInput(now, dt) {
   if (AUTOPILOT && S?.playerCar && (app.state === 'race' || app.state === 'quali')) {
     const kb = keyboard.update(dt);
     if (S.state === 'grid') return { ...kb, gas: false, brake: true };
-    return { ...kb, ...autopilotInput(S.playerCar, game.track, game.prof, game.spec, { assist: ASSIST[settings.assist] }) };
+    // заказал пит-стоп — автопилот едет по пути въезда в пит-лейн
+    const pit = S.player?.pit, L = game.track.pit;
+    const toPit = L && pit && (pit.request || pit.active) && (pit.active || L.rel(S.playerCar.s) > game.track.length - 300);
+    return { ...kb, ...autopilotInput(S.playerCar, game.track, game.prof, game.spec, { assist: ASSIST[settings.assist], lineOffset: toPit ? (k) => L.pathD(k * game.track.ds) : null }) };
   }
   if (app.mode === 'keyboard') return keyboard.update(dt);
   // инференс рук — не чаще detectHz и только на новом кадре камеры, отдельно от рендера
@@ -621,7 +674,16 @@ function tick(now, dt) {
   const S = game.session;
   const driving = (app.state === 'race' || app.state === 'quali') && S;
   const car = S?.playerCar;
-  if (driving && input.nitro && (S.state === 'race' || app.state === 'quali') && tryBoost(car)) audio.nitro();
+  // большой палец вверх: на подъезде к пит-лейну — выбор шин, иначе ускорение
+  const pitWin = driving && car && S.player?.pit && (S.player.pit.windowOpen(car) || (S.player.pit.request && S.player.pit.phase === 'track'));
+  if (driving && input.nitro && pitWin) {
+    S.player.pit.cycle(S.suggestTires(S.player));
+    audio.ok();
+  } else if (driving && input.nitro && (S.state === 'race' || app.state === 'quali') && tryBoost(car)) audio.nitro();
+  if (driving && car && S.player?.pit && (app.blendT = (app.blendT || 0) - dt) <= 0) {
+    app.blendT = 0.5;
+    blendProfile(car.tireGrip ?? 1);
+  }
 
   // старт/продолжить: поднятые ладони или Enter
   const typing = document.activeElement instanceof HTMLInputElement;
@@ -720,8 +782,15 @@ function tick(now, dt) {
       lodScale,
       focus: car && showCars ? car : { s: game.track.project(gfx.camera.position.x, gfx.camera.position.z, -1).s },
       bots: app.state === 'race' || (app.state === 'paused' && app.pausedFrom === 'race') ? game.bots : null,
+      pit: pitView(S),
     });
     gfx.setSpeedBlur(car && showCars ? Math.max(0, (speedOf(car) / game.spec.vmax - 0.55) * 1.6) : 0);
+    // погода: мокрый асфальт, капли, приглушённый свет
+    const W = weatherView(S);
+    WET.uWet.value += (W.visWet - WET.uWet.value) * Math.min(1, dt * 2);
+    gfx.setRainMood(W.rain);
+    const vel = car && showCars ? { x: car.u * Math.sin(car.psi) + car.v * Math.cos(car.psi), z: car.u * Math.cos(car.psi) - car.v * Math.sin(car.psi) } : null;
+    rain.update(app.state === 'paused' ? 0 : dt, W.rain * (quality.current.id === 'low' ? 0.5 : 1), gfx.camera.position, vel, game.track.def.env?.time === 'night');
     gfx.render();
   }
 
@@ -752,9 +821,10 @@ function tick(now, dt) {
       boost: car.boostOn,
       nearest,
     });
-    emitFromCar(fx, car, game.track, dt, { wet: !!game.track.def.env?.wet, offType: game.track.def.env?.ground === 'sand' ? 'sand' : 'dust', f1: game.spec.id === 'f1' });
+    const wetNow = WET.uWet.value > 0.3;
+    emitFromCar(fx, car, game.track, dt, { wet: wetNow, offType: game.track.def.env?.ground === 'sand' ? 'sand' : 'dust', f1: game.spec.id === 'f1' });
     // брызги за соперниками на мокром асфальте (только близкие к камере)
-    if (game.track.def.env?.wet && app.state === 'race') {
+    if (wetNow && app.state === 'race') {
       for (const b of S.bots) {
         if (b.v < 15 || Math.random() > dt * 18) continue;
         const dx = b.x - gfx.camera.position.x, dz = b.z - gfx.camera.position.z;
@@ -824,8 +894,10 @@ function updateHud(S, car, input, dt) {
       tower: rows.map((r) => ({ pos: r.pos, code: r.code, color: r.color, gap: r.time != null ? formatLap(r.time) : '—', player: !!r.player })),
       cars: [{ x: car.x, z: car.z, color: PLAYER.color, player: true }],
     });
+    hudExtras(S, car);
     return;
   }
+  hudExtras(S, car);
   hud.update({
     ...common,
     lapTime: S.lapTimeOf(p),
@@ -839,6 +911,58 @@ function updateHud(S, car, input, dt) {
     cars: S.entries.map((e) => ({ x: e.isPlayer ? e.car.x : e.bot.x, z: e.isPlayer ? e.car.z : e.bot.z, color: e.color, player: e.isPlayer })),
   });
 }
+
+// Погода для рендера: влажность асфальта (ночные трассы всегда чуть влажные — блики) и дождь.
+function weatherView(S) {
+  const damp = game.track?.def.env?.wet ? 0.45 : 0;
+  const live = S && (app.state === 'race' || app.state === 'quali' || app.state === 'paused');
+  if (live) return { visWet: Math.max(damp, S.wetness || 0), rain: S.rain || 0 };
+  // в меню — по выбранной погоде, чтобы фон показывал дождь
+  const rainy = settings.weather === 'rain';
+  return { visWet: Math.max(damp, rainy ? 0.9 : 0), rain: rainy ? 0.85 : 0 };
+}
+
+// Пит-лейн для рендера: где идёт пит-стоп (механики выбегают), светофор выезда.
+function pitView(S) {
+  if (!S?.player?.pit || !(app.state === 'race' || app.state === 'quali' || app.state === 'paused')) return { service: [] };
+  const pp = S.player.pit;
+  const service = [{ box: pp.box, active: pp.phase === 'service' || pp.phase === 'release' }];
+  if (S.bots && app.state !== 'quali') for (const b of S.bots) if (b.pit?.phase === 'service') service.push({ box: b.pit.box, active: true });
+  return { service, red: pp.phase === 'service' };
+}
+
+// Шины, погода, окно пит-стопа — новые элементы HUD.
+function hudExtras(S, car) {
+  const p = S.player;
+  const pit = p.pit;
+  const kb = app.mode === 'keyboard';
+  hud.extras({
+    tire: car.tire,
+    weather: S.weather ? { ...S.weather.label(S.clock), wet: S.wetness } : null,
+    pit: pit
+      ? {
+          window: pit.windowOpen(car) || (pit.request && pit.phase === 'track'),
+          request: pit.request,
+          suggest: S.suggestTires(p),
+          phase: pit.phase,
+          progress: p.pitOut?.progress ?? 0,
+          compound: pit.compound,
+          keyboard: kb,
+        }
+      : null,
+    ping: null,
+  });
+}
+
+// Выбор шин кнопкой/клавишей в окне пит-стопа.
+function pitPick(id) {
+  const S = game.session;
+  const pit = S?.player?.pit;
+  if (!pit || pit.phase !== 'track') return;
+  pit.request = id;
+  audio.ok();
+}
+hud.onPitPick = pitPick;
 
 // ---------- кнопки и клавиши ----------
 function switchCamera() {
@@ -894,6 +1018,12 @@ document.querySelectorAll('#touch button').forEach((btn) => {
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement) return;
   if (e.code === 'KeyK') toggleKeyboard();
+  if (['Digit1', 'Digit2', 'Digit3', 'Digit0', 'Numpad1', 'Numpad2', 'Numpad3', 'Numpad0'].includes(e.code) && game.session?.player?.pit) {
+    const k = e.code.slice(-1);
+    if (k === '0') {
+      if (game.session.player.pit.phase === 'track') game.session.player.pit.request = null;
+    } else pitPick(['soft', 'medium', 'wet'][+k - 1]);
+  }
   if (e.code === 'KeyM') toggleMute();
   if (e.code === 'KeyC') switchCamera();
   if (e.code === 'Backquote' || e.code === 'F3') {

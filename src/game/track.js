@@ -7,6 +7,7 @@
 // Боковое смещение d > 0 — левее центра. Кривизна κ > 0 — поворот налево.
 import { CatmullRomCurve3, Vector3 } from 'three';
 import { wrapAngle } from '../util/rng.js';
+import { PitLane } from './pit.js';
 
 export const SAMPLE_M = 2; // шаг выборки, м
 
@@ -160,7 +161,9 @@ export class Track {
         if (k === this.wrap(c.exit + exitPad)) break;
       }
     }
-    this.pit = null; // пит-лейн (pit.js) подключается отдельно
+    // пит-лейн вдоль стартовой прямой (pit.js): отодвигает стену и даёт покрытие 'pit'
+    this.pit = null;
+    if (def.pit) this.pit = new PitLane(this, def.pit);
     // мост: диапазон s и центр лагуны под ним
     if (def.bridge) {
       const w = (t) => ((((t - shift) % 1) + 1) % 1) * this.length;

@@ -3,11 +3,12 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import * as TX from './textures.js';
+import { patchWet } from './rain.js';
 
 const ROAD_COLS = 8; // поперечных делений дороги
 
 // Сборщик геометрии: вершины + UV (+ цвета) + индексы.
-class Geo {
+export class Geo {
   constructor(colors = false) {
     this.pos = [];
     this.uv = [];
@@ -38,7 +39,7 @@ class Geo {
 // Полоса вдоль трассы по выборкам [i0, i0+count] (count = n — замкнутое кольцо).
 // offs(i) → смещения d слева направо (по убыванию d); y(i, d, c) → высота; u(c) → координата u.
 // vLen — метров на один повтор текстуры вдоль.
-function strip(geo, track, i0, count, offs, { y, u, vLen = 10, color = null }) {
+export function strip(geo, track, i0, count, offs, { y, u, vLen = 10, color = null }) {
   const closed = count >= track.n;
   const rows = closed ? track.n + 1 : count + 1;
   const reps = closed ? Math.max(1, Math.round(track.length / vLen)) : 0;
@@ -84,7 +85,7 @@ function runs(track, pred) {
 }
 
 // Высота «продолжения» дороги за краем (зоны вылета ровные, на уровне кромки).
-const edgeY = (track, i, d) => track.heightAt(i, 0, Math.max(-track.hw[i], Math.min(track.hw[i], d)));
+export const edgeY = (track, i, d) => track.heightAt(i, 0, Math.max(-track.hw[i], Math.min(track.hw[i], d)));
 
 export function buildRoad(track, { wet = false, rubber = null } = {}) {
   const tex = TX.asphalt({ wet });
@@ -123,6 +124,7 @@ export function buildRoad(track, { wet = false, rubber = null } = {}) {
     normalScale: new THREE.Vector2(wet ? 0.22 : 0.35, wet ? 0.22 : 0.35),
     envMapIntensity: wet ? 1.0 : 0.3,
   });
+  patchWet(mat);
   const mesh = new THREE.Mesh(geo.build(), mat);
   mesh.receiveShadow = true;
   mesh.name = 'road';
@@ -151,7 +153,7 @@ function buildKerbs(track) {
       );
     }
   }
-  const mat = new THREE.MeshStandardMaterial({ map: TX.kerb(), roughness: 0.7, envMapIntensity: 0.4 });
+  const mat = patchWet(new THREE.MeshStandardMaterial({ map: TX.kerb(), roughness: 0.7, envMapIntensity: 0.4 }), { puddles: false, darken: 0.8 });
   const mesh = new THREE.Mesh(geo.build(), mat);
   mesh.receiveShadow = true;
   mesh.name = 'kerbs';
@@ -241,7 +243,7 @@ function buildWalls(track, kind) {
 }
 
 // Плоский прямоугольник на дороге между s0 и s1, по d от dL до dR (dL > dR).
-function roadQuad(track, s0, s1, dL, dR, lift = 0.02) {
+export function roadQuad(track, s0, s1, dL, dR, lift = 0.02) {
   const g = new Geo();
   const pts = [
     [s0, dL],
@@ -257,7 +259,7 @@ function roadQuad(track, s0, s1, dL, dR, lift = 0.02) {
   return g.build();
 }
 
-function decalMaterial(opts) {
+export function decalMaterial(opts) {
   return new THREE.MeshStandardMaterial({
     roughness: 0.8,
     polygonOffset: true,

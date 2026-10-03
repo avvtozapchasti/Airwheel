@@ -1,4 +1,5 @@
-// Меню гоночного уик-энда: трасса, класс, число кругов, помощь рулём, соперники, графика.
+// Меню гоночного уик-энда: трасса, класс, число кругов, помощь рулём, соперники, графика,
+// погода и стартовые шины.
 // Старт — кнопкой, Enter или поднятыми ладонями (1 с).
 import { recordLine } from './leaderboard.js';
 import { esc } from '../util/format.js';
@@ -27,6 +28,16 @@ const OPTIONS = {
     ['low', 'Низкая'],
     ['medium', 'Средняя'],
     ['high', 'Высокая'],
+  ],
+  weather: [
+    ['dry', 'Сухо'],
+    ['rain', 'Дождь'],
+    ['variable', 'Переменная'],
+  ],
+  tires: [
+    ['soft', 'Soft'],
+    ['medium', 'Medium'],
+    ['wet', 'Мокрые'],
   ],
 };
 
@@ -91,6 +102,8 @@ export class Menu {
           <label>Помощь рулём ${seg('assist')}</label>
           <label>Соперники ${seg('difficulty')}</label>
           <label>Графика ${seg('graphics')}</label>
+          <label>Погода ${seg('weather')}</label>
+          <label>Шины на старте ${seg('tires')}</label>
         </div>
         ${keyboard ? '' : '<div class="meter"><span>Старт 🙌</span><div class="bar"><b id="mn-start"></b></div><em>ладони 1 с</em></div>'}
         <div class="row">

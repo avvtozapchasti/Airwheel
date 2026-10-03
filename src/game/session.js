@@ -1,9 +1,12 @@
 // Гонка: 12 машин (игрок + 11 ботов), решётка, огни старта, хронометраж всех машин,
-// позиции и разрывы, штрафы, финиш и итоговый протокол с очками.
+// позиции и разрывы, штрафы, погода и шины, пит-стопы, финиш и итоговый протокол с очками.
 // События наружу (звук, сообщения, HUD) — через колбэк onEvent({type, ...}).
 import { createCar, stepCar, respawn, speedOf } from './physics.js';
 import { LapTiming } from './timing.js';
-import { updateBots, collidePlayer } from './bots.js';
+import { updateBots, collidePlayer, botStartTires } from './bots.js';
+import { createTire, updateTire, suggestCompound } from './tires.js';
+import { PlayerPit } from './pit.js';
+import { autopilotInput } from './autopilot.js';
 
 export const PENALTY = { wall: 2, cut: 3, jump: 5, reset: 2, pit: 3 };
 export const POINTS = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1];
@@ -39,8 +42,77 @@ export class RaceSession {
     this.fastest = null; // {entry, time}
     this.state = 'idle';
     this.time = 0;
+    this.clock = 0; // с момента старта сессии (вместе с решёткой) — по нему идёт погода
+    this.weather = opts.weather || null;
+    this.wetness = 0;
+    this.rain = 0;
     this.lastPos = null;
     this.posCd = 0;
+  }
+
+  // Влажность трассы и дождь по часам сессии; предупреждения о погоде.
+  updateWeather(dt) {
+    this.clock += dt;
+    const W = this.weather;
+    if (!W) return;
+    this.wetness = W.wetnessAt(this.clock);
+    this.rain = W.rainAt(this.clock);
+    const f = W.forecast(this.clock);
+    const lap = this.opts.prof?.lapTime ?? 90;
+    if (f?.type === 'rain' && f.in < lap && !this.warnedRain) {
+      this.warnedRain = true;
+      this.emit({ type: 'weather', kind: 'rain-soon', in: f.in });
+    }
+    if (this.rain > 0.3 && !this.warnedStart && W.mode === 'variable') {
+      this.warnedStart = true;
+      this.emit({ type: 'weather', kind: 'rain' });
+    }
+    if (this.warnedStart && this.rain < 0.05 && !this.warnedStop && W.mode === 'variable') {
+      this.warnedStop = true;
+      this.emit({ type: 'weather', kind: 'stop' });
+    }
+  }
+
+  // Руль к пути pathD(s) — для помощи на въезде в пит-лейн.
+  steerTo(car, pathOfS) {
+    const tr = this.track;
+    return autopilotInput(car, tr, this.opts.prof, this.spec, { assist: this.assist, lineOffset: (k) => pathOfS(k * tr.ds) }).steer;
+  }
+
+  // Шаг машины игрока: пит-стоп (фазы, удержание, ограничитель) → физика → шины.
+  stepPlayer(p, input, dt, extra = {}) {
+    const car = p.car;
+    const pit = p.pit.update(dt, car, input, {
+      time: this.time,
+      lap: p.timing.lap,
+      assist: this.assist,
+      steerTo: (fn) => this.steerTo(car, fn),
+    });
+    p.pitOut = pit;
+    const events = stepCar(car, pit.input, dt, this.track, {
+      assist: this.assist,
+      wetness: this.wetness,
+      hold: pit.frozen,
+      limiter: pit.limiter,
+      pitLane: pit.pitLane,
+      ...extra,
+    });
+    updateTire(car, dt, this.wetness);
+    car.lift = pit.lift;
+    return events;
+  }
+
+  // Событие пит-стопа игрока: штраф за скорость и сообщения.
+  onPit(p, e) {
+    if (e.type === 'pit-speed') this.addPenalty(p, PENALTY.pit, 'pit');
+    this.emit({ ...e, entry: p });
+  }
+
+  // Подсказка для окна выбора шин.
+  suggestTires(p) {
+    const lapsLeft = this.laps - p.timing.lap + 1;
+    const f = this.weather?.forecast(this.clock);
+    return suggestCompound(this.wetness, lapsLeft, f?.type === 'rain' && f.in < 60);
   }
 
   emit(e) {
@@ -56,6 +128,7 @@ export class RaceSession {
       const slot = tr.gridSlot(k);
       if (who === 'player') {
         const car = createCar(this.spec, tr, slot);
+        car.tire = createTire(this.opts.compound || 'medium');
         this.player = entryBase({
           id: 'player',
           isPlayer: true,
@@ -70,6 +143,7 @@ export class RaceSession {
         this.entries.push(this.player);
       } else {
         who.place(slot.s, slot.d);
+        who.pit.box = k;
         this.entries.push(
           entryBase({
             id: who.code,
@@ -85,7 +159,13 @@ export class RaceSession {
       }
     });
     this.bots = this.entries.filter((e) => e.bot).map((e) => e.bot);
+    botStartTires(this.bots, this.weather?.mode ?? 'dry', this.laps);
+    const box = this.entries.indexOf(this.player);
+    this.player.pit = new PlayerPit(tr.pit, box, { emit: (e) => this.onPit(this.player, e), prof: this.opts.prof });
+    this.pitRef = this.player.pit.ref;
     this.time = 0;
+    this.clock = 0;
+    this.warnedRain = this.warnedStart = this.warnedStop = false;
     this.phaseT = -(this.opts.intro ?? 3.4); // панорама решётки до огней
     this.lights = 0;
     this.holdT = 0.4 + Math.random() * 1.2; // пауза перед «огни погасли»
@@ -117,12 +197,13 @@ export class RaceSession {
       this.emit({ type: 'light', n });
     }
     const p = this.player;
-    stepCar(p.car, input, dt, this.track, { assist: this.assist, frozen: this.phaseT < 0, noReverse: true });
+    this.updateWeather(dt);
+    this.stepPlayer(p, input, dt, { frozen: this.phaseT < 0, noReverse: true });
     if (!this.jumped && p.car.progress - p.slot.s > 1.0) {
       this.jumped = true;
       this.addPenalty(p, PENALTY.jump, 'jump');
     }
-    updateBots(this.bots, { dt, player: p.car, raceTime: 0, started: false });
+    updateBots(this.bots, { ...this.botCtx(dt, p), raceTime: 0, started: false });
     if (this.phaseT >= 5 + this.holdT) {
       this.state = 'race';
       this.lights = 0;
@@ -134,10 +215,11 @@ export class RaceSession {
     if (this.state === 'grid') return this.stepGrid(dt, input);
     if (this.state !== 'race' && this.state !== 'finished') return;
     this.time += dt;
+    this.updateWeather(dt);
     const p = this.player;
     const control = p.finished ? { steer: 0, gas: false, brake: 0.4 } : input;
-    const events = stepCar(p.car, control, dt, this.track, { assist: this.assist });
-    updateBots(this.bots, { dt, player: p.car, raceTime: this.time, started: true });
+    const events = this.stepPlayer(p, control, dt);
+    updateBots(this.bots, this.botCtx(dt, p));
     for (const ev of collidePlayer(p.car, this.bots, this.track)) events.push(ev);
     this.lastPhysics = events;
     for (const e of events) this.emit({ ...e, entry: p });
@@ -159,6 +241,20 @@ export class RaceSession {
     }
   }
 
+  botCtx(dt, p) {
+    return {
+      dt,
+      player: p.car,
+      raceTime: this.time,
+      started: true,
+      wetness: this.wetness,
+      laps: this.laps,
+      forecast: this.weather?.forecast(this.clock) ?? null,
+      lapTime: this.opts.prof?.lapTime ?? 90,
+      pitRef: this.pitRef,
+    };
+  }
+
   // Штрафы игрока: удар о стену и срезка (все 4 колеса за линией трассы > 1 с).
   judge(e, events, dt) {
     e.wallCd = Math.max(0, e.wallCd - dt);
@@ -171,7 +267,7 @@ export class RaceSession {
     const car = e.car;
     const i = car.idx;
     const limit = this.track.hw[i] + this.track.kerb[i] + this.spec.dims.width / 2;
-    if (Math.abs(car.d) > limit && car.wheelsOut === 4) {
+    if (Math.abs(car.d) > limit && car.wheelsOut === 4 && !e.pit?.active) {
       e.cutT += dt;
       if (e.cutT > CUT_SEC && !e.cutGiven) {
         e.cutGiven = true;
@@ -332,6 +428,8 @@ export class RaceSession {
         gapText: k === 0 ? '' : `+${(total - wTotal).toFixed(3)}`,
         bestLap: e.timing.bestLap,
         penalty: e.penalty,
+        pits: e.isPlayer ? e.pit.stops.length : e.bot.pitStops.length,
+        pitLoss: e.isPlayer ? e.pit.lossTotal : e.bot.pitStops.reduce((a, x) => a + x.loss, 0),
         points: POINTS[k] || 0,
         grid: e.grid,
         fastest: this.fastest?.entry === e,

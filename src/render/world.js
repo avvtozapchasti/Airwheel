@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { buildTerrain, TrackGrid } from './terrain.js';
 import { buildTrackGroup, disposeGroup } from './trackMesh.js';
 import { buildScenery } from './scenery.js';
+import { buildPitLane } from './pitlane.js';
 import * as TX from './textures.js';
 
 const POOL = 6; // максимум настоящих точечных огней
@@ -63,13 +64,15 @@ export class World {
     group.add(trackGroup);
     this.scenery = buildScenery(track, env, grid, terrain.heightAt, { density: quality.density ?? 1, seaAt: terrain.seaAt });
     group.add(this.scenery.group);
+    this.pit = track.pit ? buildPitLane(track, env) : null;
+    if (this.pit) group.add(this.pit.group);
     this.gfx.scene.add(group);
     this.gfx.setEnvironment(env);
     this.group = group;
     this.track = track;
     this.env = env;
     this.night = env.time === 'night';
-    this.lights = [...(trackGroup.userData.lights || []), ...(this.scenery.lights || [])];
+    this.lights = [...(trackGroup.userData.lights || []), ...(this.scenery.lights || []), ...(this.pit?.lights || [])];
     this.setStartLights = trackGroup.userData.setStartLights;
     this.gfx.scene.add(this.botPools);
     for (const l of this.pool) {
@@ -95,8 +98,9 @@ export class World {
 
   // Каждый кадр: LOD, вода, огни у игрока, пятна фар ботов.
   // focus: { s, x, y, z } — позиция игрока (или камеры), bots: [{x, y, z, psi}]
-  update(camPos, { lodScale = 1, dt = 0, focus = null, bots = null } = {}) {
+  update(camPos, { lodScale = 1, dt = 0, focus = null, bots = null, pit = null } = {}) {
     this.scenery?.update(camPos, lodScale, dt);
+    if (this.pit && pit) this.pit.update(dt, pit);
     this.headlight.intensity = this.night && this.headlightOwner?.root.visible ? 110 : 0;
     if (!this.night || !this.track) {
       for (const l of this.pool) l.intensity = 0;
@@ -155,6 +159,7 @@ export class World {
     disposeGroup(this.group);
     this.group = null;
     this.scenery = null;
+    this.pit = null;
     this.track = null;
     this.lights = [];
   }

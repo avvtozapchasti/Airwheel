@@ -194,6 +194,15 @@ export function stepCar(car, input, dt, track, opts = {}) {
   const events = [];
   savePrev(car);
   car.time += dt;
+  // удержание на месте (пит-стоп): машина стоит, двигатель на холостых
+  if (opts.hold) {
+    car.u = car.v = car.r = 0;
+    car.throttle = car.brake = 0;
+    car.ax = car.ay = 0;
+    car.rpm += (C.rpm.idle - car.rpm) * Math.min(1, dt * 5);
+    car.stuckT = 0;
+    return events;
+  }
   const assist = opts.assist ?? 0.65;
   const wet = opts.wetness ?? 0;
   const frozen = !!opts.frozen;

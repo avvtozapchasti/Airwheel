@@ -6,6 +6,8 @@ import { computeRacingLine, speedProfile, brakingPoints, topSpeed } from '../src
 import { CARS } from '../src/game/cars.js';
 import { createCar, stepCar, STEP, speedOf, maxSteer } from '../src/game/physics.js';
 import { rng } from '../src/util/rng.js';
+import { compoundGrip, wearGrip, createTire, updateTire, COMPOUND_IDS } from '../src/game/tires.js';
+import { Weather } from '../src/game/weather.js';
 import ALPINE from '../src/game/tracks/alpine.js';
 import STREET from '../src/game/tracks/street.js';
 import COASTAL from '../src/game/tracks/coastal.js';
@@ -249,8 +251,14 @@ test('Street Night: узкая 9–11 м с участком ~8 м, шпильк
   assert.ok(bps.some((b) => b.corner.type === 'hairpin' && b.vMin < 16), 'шпилька');
   assert.ok(bps.filter((b) => b.corner.type === 'turn90' && b.vEntry - b.vMin > 10).length >= 3, '90° под тормоз');
   assert.ok(STREET.tunnel && STREET.env.time === 'night' && STREET.env.wet, 'туннель, ночь, мокро');
-  // стены вплотную: вылет меньше 4 м везде
-  for (let i = 0; i < tr.n; i++) assert.ok(tr.wallL[i] - tr.hw[i] < 4 && tr.wallR[i] - tr.hw[i] < 4);
+  // стены вплотную: вылет меньше 4 м везде (кроме стороны пит-лейна вдоль стартовой прямой)
+  for (let i = 0; i < tr.n; i++) {
+    let u = tr.pit.rel(i * tr.ds);
+    if (u > tr.length / 2) u -= tr.length;
+    const pitSide = u > -45 && u < tr.pit.len + 45;
+    assert.ok((pitSide && tr.pit.side > 0) || tr.wallL[i] - tr.hw[i] < 4, 'стена слева ' + i);
+    assert.ok((pitSide && tr.pit.side < 0) || tr.wallR[i] - tr.hw[i] < 4, 'стена справа ' + i);
+  }
   const r = autopilot(tr, CARS.gt3, prof, { laps: 1, pace: 0.9 });
   assert.equal(r.lapTimes.length, 1, 'круг пройден');
   console.log(`    ширина ${min.toFixed(1)}–${max.toFixed(1)} м, круг автопилота ${r.lapTimes[0].toFixed(1)} с (касаний стен: ${r.walls})`);
@@ -319,17 +327,17 @@ test('трава и гравий: всегда можно разогнаться
   const tr = build(ALPINE);
   for (const [cls, surf] of [['gt3', 'grass'], ['f1', 'grass'], ['gt3', 'gravel']]) {
     const spec = CARS[cls];
-    const car = createCar(spec, tr, { s: 150, d: tr.hw[tr.index(150)] + 6 });
-    if (surf === 'gravel') for (let i = 0; i < tr.n; i++) tr.gravelL[i] = 1;
+    const car = createCar(spec, tr, { s: 150, d: -(tr.hw[tr.index(150)] + 6) });
+    if (surf === 'gravel') for (let i = 0; i < tr.n; i++) tr.gravelR[i] = 1;
     stepCar(car, { steer: 0, gas: false, brake: false }, STEP, tr, {});
     assert.equal(car.surfaces[0], surf);
     for (let k = 0; k < 120 * 4; k++) stepCar(car, { steer: 0, gas: true, brake: false }, STEP, tr, { assist: 0.65 });
     const v4 = car.u * 3.6;
     assert.ok(v4 > (surf === 'grass' ? 40 : 25), `${cls} ${surf}: за 4 с с места ${v4.toFixed(0)} км/ч`);
-    if (surf === 'gravel') tr.gravelL.fill(0);
+    if (surf === 'gravel') tr.gravelR.fill(0);
   }
   // накатом с 180 км/ч по траве: замедление от покрытия 10–15 км/ч в секунду (без учёта воздуха)
-  const car = createCar(CARS.gt3, tr, { s: 150, d: tr.hw[tr.index(150)] + 6 });
+  const car = createCar(CARS.gt3, tr, { s: 150, d: -(tr.hw[tr.index(150)] + 6) });
   car.u = 50;
   car.gear = 4;
   const v0 = car.u;
@@ -339,7 +347,7 @@ test('трава и гравий: всегда можно разогнаться
   assert.ok(dec > 10 && dec < 16, 'замедление на траве ' + dec.toFixed(1) + ' км/ч/с');
   // и возвращается на асфальт
   for (let k = 0; k < 120 * 5 && car.wheelsOut > 0; k++) {
-    const input = { steer: 0.35, gas: true, brake: false };
+    const input = { steer: -0.35, gas: true, brake: false };
     stepCar(car, input, STEP, tr, { assist: 0.65 });
   }
   assert.equal(car.wheelsOut, 0, 'вернулся на асфальт');
@@ -431,6 +439,119 @@ test('жесты (задержка, дрожь рук, газ вкл/выкл): 
     assert.ok(f.done && f.spins === 0, `${def.name} F1 с помощью: разворотов ${f.spins}`);
     console.log(`    ${def.name}: GT3 вылетов ${a.offs} (без помощи ${n.offs}, разворотов ${n.spins}), F1 вылетов ${f.offs}`);
   }
+});
+
+// --- блок B: шины, погода, пит-лейн ---
+test('шины: сухие в дождь ~0.65, мокрые на сухом ~0.85, износ снимает 10–25% сцепления', () => {
+  const dryInRain = compoundGrip('medium', 0.9), wetOnDry = compoundGrip('wet', 0);
+  assert.ok(dryInRain > 0.6 && dryInRain < 0.7, 'сухие в дождь ' + dryInRain.toFixed(2));
+  assert.ok(Math.abs(wetOnDry - 0.85) < 0.02, 'мокрые на сухом ' + wetOnDry.toFixed(2));
+  assert.ok(compoundGrip('wet', 0.9) > compoundGrip('soft', 0.9), 'в дождь мокрые лучше');
+  assert.ok(compoundGrip('soft', 0) > compoundGrip('wet', 0), 'на сухом сухие лучше');
+  // точка, где мокрые выгоднее, — около 0.3
+  let cross = 0;
+  for (let w = 0; w <= 1; w += 0.01) if (compoundGrip('wet', w) > compoundGrip('medium', w)) { cross = w; break; }
+  assert.ok(cross > 0.25 && cross < 0.4, 'переход ' + cross.toFixed(2));
+  for (const id of COMPOUND_IDS) {
+    const loss = 1 - wearGrip(id, 1);
+    assert.ok(loss >= 0.1 && loss <= 0.25, `${id}: износ −${(loss * 100).toFixed(0)}%`);
+  }
+  // мокрая шина на сухом стирается быстрее, чем в дождь
+  const tr = build(ALPINE);
+  const wearOf = (compound, wet) => {
+    const car = createCar(CARS.gt3, tr, { s: 0, d: 0 });
+    car.tire = createTire(compound);
+    const prof = speedProfile(tr, tr.racingLine, CARS.gt3);
+    for (let k = 0; k < 120 * 30; k++) {
+      stepCar(car, autopilotInput(car, tr, prof, CARS.gt3, { pace: 0.85 }), STEP, tr, { assist: 0.65, wetness: wet });
+      updateTire(car, STEP, wet);
+    }
+    return car.tire.wear;
+  };
+  assert.ok(wearOf('wet', 0) > wearOf('wet', 0.9) * 1.8, 'мокрые перегреваются на сухом');
+  assert.ok(wearOf('soft', 0) > wearOf('medium', 0) * 1.4, 'soft изнашивается быстрее medium');
+});
+
+test('погода: «Переменная» — дождь на 1–2 круге с предупреждением, трасса намокает и сохнет; seed детерминирован', () => {
+  const lap = 80;
+  const a = new Weather('variable', { seed: 42, lapTime: lap }), b = new Weather('variable', { seed: 42, lapTime: lap });
+  assert.equal(a.start, b.start, 'одинаковый seed — одинаковый дождь у всех игроков');
+  assert.ok(a.start > lap * 0.8 && a.start < lap * 1.5, 'старт дождя ' + a.start.toFixed(0));
+  assert.equal(a.forecast(a.start - 70).type, 'rain');
+  assert.equal(a.wetnessAt(a.start - 1), 0);
+  const peak = a.wetnessAt(a.start + 60);
+  assert.ok(peak > 0.6, 'намокла ' + peak.toFixed(2));
+  const end = a.start + a.dur;
+  assert.ok(a.wetnessAt(end + 60) < a.wetnessAt(end) && a.wetnessAt(end + 200) < 0.25, 'сохнет');
+  assert.ok(Math.abs(b.wetnessAt(a.start + 60) - peak) < 1e-9, 'влажность одинаковая');
+  const r = new Weather('rain'), d = new Weather('dry');
+  assert.ok(r.wetnessAt(10) > 0.8 && r.rainAt(10) > 0.5 && d.wetnessAt(500) === 0);
+});
+
+// Водитель для теста пит-стопа: автопилот, на подъезде к пит-лейну — по пути въезда.
+function pitRace({ track = ALPINE, weather = 'dry', laps = 3, assist = 0.65, requestLap = 2, compound = 'wet', brakeForPit = true } = {}) {
+  const tr = build(track);
+  const spec = CARS.gt3;
+  const prof = speedProfile(tr, tr.racingLine, spec);
+  const bots = createBots(11, spec, tr, { seed: 9, bps: brakingPoints(tr, prof) });
+  const events = [];
+  const S = new RaceSession({ track: tr, spec, laps, assist, bots, prof, weather: new Weather(weather, { seed: 4, lapTime: prof.lapTime * 1.1 }), compound: 'medium', onEvent: (e) => events.push(e) });
+  const order = [...bots];
+  order.splice(5, 0, 'player');
+  S.start(order);
+  let guard = 0, maxPitV = 0;
+  const L = tr.pit;
+  while (S.state !== 'done' && guard++ < 120 * 600) {
+    const car = S.playerCar, p = S.player;
+    if (p.timing.lap === requestLap && !p.pit.request && p.pit.windowOpen(car) && !p.pit.stops.length) p.pit.request = compound;
+    const toPit = p.pit.request || p.pit.active;
+    let input = S.state === 'grid' ? { steer: 0, gas: false, brake: true } : autopilotInput(car, tr, prof, spec, { pace: 0.85, lineOffset: toPit && (p.pit.active || L.rel(car.s) > tr.length - 300) ? (k) => L.pathD(k * tr.ds) : null });
+    if (brakeForPit && p.pit.request && p.pit.phase === 'track') {
+      const u = L.rel(car.s);
+      const toLine = (u > L.len ? tr.length - u : -u) + L.limA;
+      if (speedOf(car) > Math.sqrt((60 / 3.6) ** 2 + 2 * 5 * Math.max(0, toLine - 8))) input = { ...input, gas: false, brake: true };
+    }
+    S.step(STEP, input);
+    if (p.pit.active && L.inLimitZone(car.s)) maxPitV = Math.max(maxPitV, speedOf(car));
+  }
+  return { S, events, maxPitV };
+}
+
+test('пит-стоп игрока: въезд, 60 км/ч, остановка в боксе 2.5–4 с, смена шин, выезд, потери в протоколе', () => {
+  const { S, events, maxPitV } = pitRace();
+  const types = events.map((e) => e.type);
+  for (const t of ['pit-enter', 'pit-stop', 'pit-done', 'pit-release', 'pit-exit']) assert.ok(types.includes(t), 'событие ' + t);
+  const stop = events.find((e) => e.type === 'pit-stop');
+  assert.ok(stop.duration >= 2.5 && stop.duration <= 4.0, 'длительность ' + stop.duration.toFixed(2));
+  assert.equal(S.playerCar.tire.compound, 'wet', 'шины сменились');
+  assert.ok(maxPitV * 3.6 < 63, 'скорость в пит-лейне ' + (maxPitV * 3.6).toFixed(1));
+  assert.ok(!events.some((e) => e.type === 'penalty' && e.reason === 'pit'), 'без штрафа');
+  const me = S.results().find((r) => r.player);
+  assert.equal(me.pits, 1);
+  assert.ok(me.pitLoss > 10 && me.pitLoss < 30, 'потери ' + me.pitLoss.toFixed(1));
+  console.log(`    пит-стоп ${stop.duration.toFixed(1)} с, потери ${me.pitLoss.toFixed(1)} с, макс. ${(maxPitV * 3.6).toFixed(0)} км/ч`);
+});
+
+test('пит-лейн: превышение 60 км/ч на линии въезда — штраф +3 с и подсказка коуча', () => {
+  const { events } = pitRace({ assist: 0, brakeForPit: false, laps: 2 });
+  assert.ok(events.some((e) => e.type === 'penalty' && e.reason === 'pit' && e.sec === 3), 'штраф');
+  const tr = build(ALPINE);
+  const prof = speedProfile(tr, tr.racingLine, CARS.gt3);
+  const an = new DriveAnalyzer(tr, prof, brakingPoints(tr, prof), CARS.gt3);
+  const car = createCar(CARS.gt3, tr, { s: tr.pit.sIn + tr.pit.limA + 20, d: tr.pit.side * tr.pit.fastD(tr.pit.sIn + 100) });
+  car.u = 30;
+  const ids = an.update({ car, input: { steer: 0, gas: true, brake: false }, dt: 1 / 30 }).map((e) => e.id);
+  assert.ok(ids.includes('pit_speed'), ids.join(','));
+});
+
+test('боты: в «Переменной» погоде меняют шины на мокрые в боксах, без «читов» по времени', () => {
+  const { S } = pitRace({ weather: 'variable', laps: 4, requestLap: 99 });
+  const rows = S.results().filter((r) => !r.player);
+  const pitted = rows.filter((r) => r.pits > 0);
+  assert.ok(pitted.length >= 6, 'заехали ' + pitted.length);
+  for (const r of pitted) assert.ok(r.pitLoss > 10 && r.pitLoss < 35, `${r.code}: потери ${r.pitLoss.toFixed(1)}`);
+  assert.ok(pitted.some((r) => r.entry.bot.pitStops.some((x) => x.compound === 'wet')), 'на мокрые');
+  console.log(`    пит-стопы ботов: ${pitted.length}/11, потери ${(pitted.reduce((a, r) => a + r.pitLoss, 0) / pitted.length).toFixed(1)} с в среднем`);
 });
 
 test('графика: автоподбор понижает пресет, если средний FPS < 45 за 3 с', async () => {

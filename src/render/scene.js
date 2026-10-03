@@ -215,6 +215,7 @@ export class Graphics {
       u.mieCoefficient.value = s.mie ?? 0.005;
       u.mieDirectionalG.value = s.mieG ?? 0.8;
       u.sunPosition.value.copy(this.sunDir);
+      this.skyBase = u.rayleigh.value;
     }
     this.sun.color.set(env.sun?.color ?? 0xffffff);
     this.sun.intensity = env.sun?.intensity ?? 3;
@@ -235,6 +236,38 @@ export class Graphics {
     this.bloom.threshold = b.threshold ?? (this.night ? 0.85 : 2.2);
     this.final.uniforms.vignette.value = this.night ? 0.45 : 0.3;
     this.bakeEnvironment();
+    // базовые значения для «дождевого» настроения (setRainMood)
+    this.moodBase = {
+      sun: this.sun.intensity,
+      hemi: this.hemi.intensity,
+      fogColor: this.scene.fog.color.clone(),
+      fogNear: this.fogBase.near,
+      fogFar: this.fogBase.far,
+      exposure: this.renderer.toneMappingExposure,
+      env: this.scene.environmentIntensity,
+    };
+    this.rainMood = -1;
+    this.setRainMood(0);
+  }
+
+  // Дождь: солнце слабее, туман плотнее и серее, небо приглушено. k — сила дождя 0..1.
+  setRainMood(k) {
+    const B = this.moodBase;
+    if (!B || Math.abs(k - this.rainMood) < 0.01) return;
+    this.rainMood = k;
+    this.sun.intensity = B.sun * (1 - 0.65 * k);
+    this.hemi.intensity = B.hemi * (1 + 0.3 * k);
+    const grey = this.night ? new THREE.Color(0x10131c) : new THREE.Color(0x8a96a4);
+    this.scene.fog.color.copy(B.fogColor).lerp(grey, 0.7 * k);
+    this.fogBase.near = B.fogNear * (1 - 0.6 * k);
+    this.fogBase.far = B.fogFar * (1 - 0.55 * k);
+    this.applyFar();
+    this.renderer.toneMappingExposure = B.exposure * (1 - 0.12 * k);
+    this.scene.environmentIntensity = B.env * (1 + 0.4 * k);
+    if (this.sky.visible) this.sky.material.uniforms.rayleigh.value = (this.skyBase ?? (this.skyBase = this.sky.material.uniforms.rayleigh.value)) * (1 - 0.5 * k);
+    // окружение для отражений перепекаем только при заметной смене (дорого, но редко)
+    const oc = k > 0.25 ? 1 : 0;
+    if (!this.night && oc !== (this.envOvercast ? 1 : 0)) this.bakeEnvironment(oc);
   }
 
   applyFar() {
@@ -246,9 +279,10 @@ export class Graphics {
 
   // Environment map для отражений на кузове и мокром асфальте — из неба через PMREM.
   // Ночью добавляем «огни города» вокруг, чтобы в лаке и лужах отражался свет.
-  bakeEnvironment() {
+  bakeEnvironment(overcast = 0) {
     const envScene = new THREE.Scene();
     const disposables = [];
+    this.envOvercast = overcast;
     if (this.night) {
       const m = nightSkyMaterial();
       m.uniforms.horizon.value.copy(this.nightSky.material.uniforms.horizon.value);
@@ -280,6 +314,15 @@ export class Graphics {
       dst.sunPosition.value.copy(src.sunPosition.value);
       envScene.add(sky);
       disposables.push(sky.geometry, sky.material);
+      // пасмурно: серый купол поверх неба — в мокром асфальте отражаются облака, а не синее небо
+      if (overcast > 0) {
+        const dome = new THREE.Mesh(
+          new THREE.SphereGeometry(40, 24, 12),
+          new THREE.MeshBasicMaterial({ color: new THREE.Color(0x9aa5b2).multiplyScalar(0.9), side: THREE.BackSide, transparent: true, opacity: 0.85 * overcast, depthWrite: false, fog: false }),
+        );
+        envScene.add(dome);
+        disposables.push(dome.geometry, dome.material);
+      }
     }
     this.envRT?.dispose();
     this.envRT = this.pmrem.fromScene(envScene, 0.02, 0.1, 100);

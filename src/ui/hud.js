@@ -2,6 +2,7 @@
 // и два маленьких canvas — приборная панель и мини-карта. Текст в DOM обновляется,
 // только если изменился, чтобы не нагружать браузер каждый кадр.
 import { formatTime, formatDelta, formatLap } from '../util/format.js';
+import { COMPOUNDS } from '../game/tires.js';
 
 const SECTOR_COLORS = { purple: '#b44cff', green: '#2fd46d', yellow: '#ffcc33' };
 
@@ -66,6 +67,29 @@ export class Hud {
     this.lightsEl = el('div', 'hud-lights', root, '<i></i><i></i><i></i><i></i><i></i>');
     this.lights = [...this.lightsEl.children];
     this.bigEl = el('div', 'hud-big', root);
+    // шины и погода (маленький виджет над приборной панелью)
+    this.tyreEl = el('div', 'hud-tyre', root);
+    this.tyreCmp = el('i', 'cmp', this.tyreEl);
+    const tw = el('div', 'tw', this.tyreEl);
+    this.tyreLabel = el('span', 'tl', tw);
+    this.tyreBar = el('b', '', el('div', 'bar', tw));
+    this.tyreTemp = el('span', 'tt', this.tyreEl);
+    this.wxEl = el('span', 'wx', this.tyreEl);
+    // окно выбора шин перед пит-лейном и кольцо пит-стопа
+    this.pitEl = el('div', 'hud-pit', root);
+    this.pitHead = el('div', 'ph', this.pitEl);
+    this.pitBtns = el('div', 'pb', this.pitEl);
+    this.pitHint = el('div', 'pn', this.pitEl);
+    this.pitBtnEls = ['soft', 'medium', 'wet'].map((id, k) => {
+      const b = el('button', '', this.pitBtns, `<i style="background:${COMPOUNDS[id].color}">${COMPOUNDS[id].short}</i>${COMPOUNDS[id].title}<small>${k + 1}</small>`);
+      b.onclick = () => this.onPitPick?.(id);
+      return b;
+    });
+    this.ringEl = el('div', 'hud-pitring', root, '<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="44" class="bg"/><circle cx="50" cy="50" r="44" class="fg"/></svg><b></b><span></span>');
+    this.ringFg = this.ringEl.querySelector('.fg');
+    this.ringB = this.ringEl.querySelector('b');
+    this.ringS = this.ringEl.querySelector('span');
+    this.pingEl = el('div', 'hud-ping', root);
     this.msgT = 0;
     this.towerT = 0;
     this.track = null;
@@ -163,6 +187,69 @@ export class Hud {
     }
     this.drawDash(s);
     this.drawMap(s);
+  }
+
+  // Новые элементы HUD: шины, погода, пит-стоп, пинг. Не трогают остальной HUD.
+  // x: { tire, weather: {icon, text, wet}, pit: {window, request, suggest, phase, progress, compound, keyboard}, ping }
+  extras(x) {
+    if (!this.visible) return;
+    const t = x.tire;
+    this.tyreEl.classList.toggle('show', !!t);
+    if (t) {
+      const C = COMPOUNDS[t.compound];
+      setText(this.tyreCmp, C.short);
+      if (this.tyreCmp._c !== C.color) {
+        this.tyreCmp._c = C.color;
+        this.tyreCmp.style.borderColor = C.color;
+        this.tyreCmp.style.color = C.color;
+      }
+      const left = Math.max(0, 1 - t.wear);
+      setText(this.tyreLabel, `${C.name} · ${Math.round(left * 100)}%`);
+      const w = `${Math.round(left * 100)}%`;
+      if (this.tyreBar._w !== w) {
+        this.tyreBar._w = w;
+        this.tyreBar.style.width = w;
+        this.tyreBar.style.background = left > 0.5 ? '#2fd46d' : left > 0.25 ? '#ffcc33' : '#ff3b4d';
+      }
+      const dT = t.temp - C.tOpt;
+      setText(this.tyreTemp, `${Math.round(t.temp)}°`);
+      this.tyreTemp.className = `tt ${dT < -12 ? 'cold' : dT > 12 ? 'hot' : ''}`;
+    }
+    if (x.weather) setText(this.wxEl, `${x.weather.icon} ${x.weather.text}${x.weather.wet > 0.05 ? ` ${Math.round(x.weather.wet * 100)}%` : ''}`);
+    // окно выбора шин
+    const P = x.pit || {};
+    const showWin = !!P.window;
+    this.pitEl.classList.toggle('show', showWin);
+    if (showWin) {
+      setHtml(this.pitHead, P.request ? `Пит-стоп: <b>${COMPOUNDS[P.request].title}</b> ✓` : `Пит-стоп на этом круге? <em>совет: ${COMPOUNDS[P.suggest].title}</em>`);
+      this.pitBtnEls.forEach((b, k) => b.classList.toggle('on', ['soft', 'medium', 'wet'][k] === P.request));
+      setText(
+        this.pitHint,
+        P.request
+          ? P.keyboard
+            ? 'Держись к пит-лейну · 0 — отмена'
+            : 'Держись к пит-лейну · 👍 — сменить / отменить'
+          : P.keyboard
+            ? '1 · 2 · 3 — выбрать шины и заехать'
+            : '👍 — заехать (ещё раз — другие шины)',
+      );
+    }
+    // кольцо пит-стопа
+    const ring = P.phase === 'service' || P.phase === 'release';
+    this.ringEl.classList.toggle('show', ring);
+    if (ring) {
+      const len = 2 * Math.PI * 44;
+      this.ringFg.style.strokeDasharray = `${len}`;
+      this.ringFg.style.strokeDashoffset = `${len * (1 - (P.progress || 0))}`;
+      setText(this.ringB, P.phase === 'release' ? 'ГОТОВО' : `${Math.round((P.progress || 0) * 100)}%`);
+      setText(this.ringS, P.phase === 'release' ? (P.keyboard ? 'Газ (↑) — выезд' : 'Сожми кулаки — выезд') : `Смена шин: ${COMPOUNDS[P.compound]?.name ?? ''}`);
+    }
+    // пинг (мультиплеер)
+    this.pingEl.classList.toggle('show', x.ping != null);
+    if (x.ping != null) {
+      setText(this.pingEl, `📶 ${Math.round(x.ping)} мс`);
+      this.pingEl.className = `hud-ping show ${x.ping > 180 ? 'bad' : x.ping > 90 ? 'mid' : ''}`;
+    }
   }
 
   drawDash(s) {

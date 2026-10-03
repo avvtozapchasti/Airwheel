@@ -436,3 +436,67 @@ html, body {
   .hud-msg { font-size: 20px; top: 46%; }
   .hud-lights { top: 27%; }
 }
+
+/* ---------- шины, погода, пит-стоп, пинг (добавлено к HUD) ---------- */
+.hud-tyre {
+  position: absolute; left: 12px; bottom: 170px; display: none; align-items: center; gap: 10px;
+  padding: 6px 12px 6px 8px; border-radius: 12px; background: rgba(8, 12, 24, 0.66); font-size: 12px;
+}
+.hud-tyre.show { display: flex; }
+.hud-tyre .cmp {
+  width: 30px; height: 30px; border-radius: 50%; border: 4px solid #ffd23f; display: grid; place-items: center;
+  font-style: normal; font-weight: 900; font-size: 14px; background: #111;
+}
+.hud-tyre .tw { display: flex; flex-direction: column; gap: 3px; min-width: 104px; }
+.hud-tyre .tl { font-weight: 700; color: #fff; }
+.hud-tyre .bar { height: 5px; border-radius: 3px; }
+.hud-tyre .bar b { transition: width 0.4s; }
+.hud-tyre .tt { font-weight: 800; color: #2fd46d; }
+.hud-tyre .tt.cold { color: #4db8ff; }
+.hud-tyre .tt.hot { color: #ff7a3d; }
+.hud-tyre .wx { color: var(--muted); font-weight: 700; padding-left: 8px; border-left: 1px solid rgba(255,255,255,0.12); white-space: nowrap; }
+.hud-pit {
+  position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); display: none; flex-direction: column;
+  gap: 6px; padding: 10px 12px; border-radius: 14px; background: rgba(8, 12, 24, 0.82); min-width: 360px; text-align: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.hud-pit.show { display: flex; }
+.hud-pit .ph { font-weight: 800; font-size: 14px; }
+.hud-pit .ph em { font-style: normal; color: var(--muted); font-weight: 600; margin-left: 6px; }
+.hud-pit .ph b { color: var(--accent); }
+.hud-pit .pb { display: flex; gap: 6px; }
+.hud-pit .pb button {
+  flex: 1; appearance: none; border: 2px solid rgba(255,255,255,0.12); border-radius: 10px; background: rgba(255,255,255,0.06);
+  color: #fff; font: 700 12px system-ui, sans-serif; padding: 6px 8px; display: flex; align-items: center; gap: 6px;
+  cursor: pointer; pointer-events: auto;
+}
+.hud-pit .pb button.on { border-color: var(--accent); background: rgba(255, 204, 51, 0.16); }
+.hud-pit .pb button i { width: 18px; height: 18px; border-radius: 50%; color: #111; font-style: normal; font-weight: 900; font-size: 11px; display: grid; place-items: center; }
+.hud-pit .pb button small { margin-left: auto; color: var(--muted); }
+.hud-pit .pn { font-size: 12px; color: var(--muted); }
+.hud-pitring {
+  position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); width: 150px; height: 150px; display: none;
+  place-items: center;
+}
+.hud-pitring.show { display: grid; }
+.hud-pitring svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+.hud-pitring circle { fill: rgba(8, 12, 24, 0.7); stroke-width: 8; }
+.hud-pitring .bg { stroke: rgba(255, 255, 255, 0.12); }
+.hud-pitring .fg { fill: none; stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset 0.1s; }
+.hud-pitring b { position: relative; font-size: 26px; font-weight: 900; margin-top: -8px; }
+.hud-pitring span { position: absolute; top: 100%; margin-top: 8px; white-space: nowrap; font-weight: 800; font-size: 15px; padding: 4px 12px; border-radius: 10px; background: rgba(8, 12, 24, 0.75); }
+.hud-ping { position: absolute; right: 190px; top: 78px; display: none; font-size: 12px; font-weight: 800; padding: 3px 8px; border-radius: 8px; background: rgba(8, 12, 24, 0.66); color: var(--ok); }
+.hud-ping.show { display: block; }
+.hud-ping.mid { color: var(--accent); }
+.hud-ping.bad { color: var(--bad); }
+@media (max-height: 560px), (max-width: 760px) {
+  .hud-tyre { bottom: 120px; left: 8px; padding: 4px 8px; font-size: 11px; }
+  .hud-tyre .cmp { width: 24px; height: 24px; border-width: 3px; font-size: 12px; }
+  .hud-tyre .tw { min-width: 80px; }
+  .hud-pit { min-width: 300px; bottom: 8px; }
+  .hud-ping { right: 126px; top: 62px; }
+}
+@media (pointer: coarse) {
+  body.kb-mode .hud-tyre { bottom: 226px; }
+  body.kb-mode .hud-pit { bottom: 120px; }
+}

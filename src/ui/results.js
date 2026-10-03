@@ -1,4 +1,4 @@
-// Экран итогов: таблица позиций (время/отставание/лучший круг/штрафы/очки/квала→финиш),
+// Экран итогов: таблица позиций (время/отставание/лучший круг/штрафы/пит-стопы и потери/очки/квала→финиш),
 // время игрока по кругам, ошибки коуча по типам и главная ошибка заезда с советом.
 import { formatTime, formatLap, esc } from '../util/format.js';
 export { esc };
@@ -29,6 +29,7 @@ function standingsTable(rows) {
         <td>${r.pos === 1 ? formatTime(r.time) : esc(r.gapText)}</td>
         <td>${formatLap(r.bestLap)}</td>
         <td>${r.penalty ? `+${r.penalty.toFixed(0)} с` : ''}</td>
+        <td>${r.pits ? `${r.pits} · ${r.pitLoss.toFixed(1)} с` : ''}</td>
         <td>${r.points || ''}</td>
         <td>${r.grid ?? ''} ${delta(r)}</td>
       </tr>`,
@@ -36,7 +37,7 @@ function standingsTable(rows) {
     .join('');
   return `
     <div class="table-wrap"><table class="standings">
-      <thead><tr><th>#</th><th>Пилот</th><th>Время</th><th>Лучший</th><th>Штраф</th><th>Очки</th><th>Старт</th></tr></thead>
+      <thead><tr><th>#</th><th>Пилот</th><th>Время</th><th>Лучший</th><th>Штраф</th><th>Пит-стопы</th><th>Очки</th><th>Старт</th></tr></thead>
       <tbody>${body}</tbody>
     </table></div>`;
 }

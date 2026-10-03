@@ -5,6 +5,9 @@
 import { createCar, stepCar, respawn } from './physics.js';
 import { LapTiming } from './timing.js';
 import { qualiTime } from './bots.js';
+import { createTire, updateTire, suggestCompound } from './tires.js';
+import { PlayerPit } from './pit.js';
+import { autopilotInput } from './autopilot.js';
 
 const OUT_LAP = 420; // м разгона до линии
 const CUT_SEC = 1.0;
@@ -32,6 +35,11 @@ export class QualiSession {
     this.attempts = opts.attempts ?? 2;
     this.onEvent = opts.onEvent || (() => {});
     this.state = 'idle';
+    this.weather = opts.weather || null;
+    this.wetness = 0;
+    this.rain = 0;
+    this.clock = 0;
+    this.laps = 3;
   }
 
   emit(e) {
@@ -40,10 +48,12 @@ export class QualiSession {
 
   start() {
     const tr = this.track;
-    // времена ботов и их сектора
+    // времена ботов и их сектора (в дождь — медленнее: средняя влажность за ~3 круга)
     this.overall = { sectors: [Infinity, Infinity, Infinity], lap: Infinity };
+    let wAvg = 0;
+    if (this.weather) for (let t = 0; t < 270; t += 10) wAvg += this.weather.wetnessAt(t) / 27;
     for (const b of this.bots) {
-      b.qualiTime = qualiTime(b, b.rng);
+      b.qualiTime = qualiTime(b, b.rng, wAvg);
       const fr = sectorFractions(tr, b.prof);
       b.qualiSectors = fr.map((f) => f * b.qualiTime);
       b.qualiSectors.forEach((x, k) => (this.overall.sectors[k] = Math.min(this.overall.sectors[k], x)));
@@ -52,6 +62,7 @@ export class QualiSession {
     // игрок — с разгона, уже на скорости
     const s0 = -OUT_LAP;
     const car = createCar(this.spec, tr, { s: s0, d: tr.racingLine.offset[tr.index(s0)] });
+    car.tire = createTire(this.opts.compound || 'medium');
     car.u = this.opts.prof.v[tr.index(s0)] * 0.7;
     car.gear = Math.max(0, this.spec.gears.findIndex((g) => g > car.u * 1.05));
     this.player = {
@@ -63,7 +74,9 @@ export class QualiSession {
       timing: new LapTiming(tr.length, { overall: this.overall }),
       cutT: 0,
     };
+    this.player.pit = new PlayerPit(tr.pit, this.opts.box ?? 11, { emit: (e) => this.emit({ ...e, entry: this.player }), prof: this.opts.prof });
     this.time = 0;
+    this.clock = 0;
     this.attempt = 0; // сколько попыток начато
     this.state = 'outlap';
     this.best = null;
@@ -82,7 +95,22 @@ export class QualiSession {
     this.time += dt;
     const p = this.player, car = p.car;
     const finishing = this.state === 'finishing';
-    const events = stepCar(car, finishing ? { steer: 0, gas: false, brake: 0.3 } : input, dt, this.track, { assist: this.assist });
+    this.clock += dt;
+    if (this.weather) {
+      this.wetness = this.weather.wetnessAt(this.clock);
+      this.rain = this.weather.rainAt(this.clock);
+    }
+    const tr = this.track;
+    const pit = p.pit.update(dt, car, finishing ? { steer: 0, gas: false, brake: 0.3 } : input, {
+      time: this.time,
+      lap: p.timing.lap,
+      assist: this.assist,
+      steerTo: (fn) => autopilotInput(car, tr, this.opts.prof, this.spec, { assist: this.assist, lineOffset: (k) => fn(k * tr.ds) }).steer,
+    });
+    p.pitOut = pit;
+    const events = stepCar(car, pit.input, dt, tr, { assist: this.assist, wetness: this.wetness, hold: pit.frozen, limiter: pit.limiter, pitLane: pit.pitLane });
+    updateTire(car, dt, this.wetness);
+    car.lift = pit.lift;
     this.lastPhysics = events;
     for (const e of events) this.emit({ ...e, entry: p });
     if (car.stuckT > 4 || car.wrongWayT > 4) {
@@ -119,10 +147,14 @@ export class QualiSession {
     }
   }
 
+  suggestTires() {
+    return suggestCompound(this.wetness, 3);
+  }
+
   judge(p, dt) {
     const car = p.car, i = car.idx;
     const limit = this.track.hw[i] + this.track.kerb[i] + this.spec.dims.width / 2;
-    if (Math.abs(car.d) > limit && car.wheelsOut === 4) {
+    if (Math.abs(car.d) > limit && car.wheelsOut === 4 && !p.pit.active) {
       p.cutT += dt;
       if (p.cutT > CUT_SEC && p.timing.valid) {
         p.timing.valid = false;

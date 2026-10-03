@@ -10,6 +10,7 @@
 //   grass          — колёса на траве
 //   brake_straight — тормозишь на прямой без причины
 //   coast_straight — не держишь газ на свободной прямой
+//   pit_speed      — в пит-лейне быстрее 60 км/ч (или летишь к линии въезда без торможения)
 export const CORNER_WORD = { hairpin: 'шпилька', turn90: 'поворот 90°', chicane: 'шикана', turn: 'поворот' };
 
 export class DriveAnalyzer {
@@ -75,8 +76,19 @@ export class DriveAnalyzer {
     // трава
     if (car.wheelsOut >= 2 && Math.abs(u) > 3) errors.push({ id: 'grass', hand: null });
 
-    // прямая: впереди нет поворота, дорога свободна
-    if (!inCorner && u > 12 && aheadGap > 40) {
+    // пит-лейн: превышение в зоне 60 км/ч или подлёт к линии въезда без торможения
+    const L = tr.pit;
+    if (L && L.inLane(car.s, car.d)) {
+      const v = Math.hypot(car.u, car.v);
+      const uu = L.rel(car.s);
+      const lim = 60 / 3.6;
+      if ((L.inLimitZone(car.s) && v > lim + 2 / 3.6) || (uu < L.limA && v > Math.sqrt(lim * lim + 2 * 7 * Math.max(0, L.limA - uu)) + 1 && car.brake < 0.3)) {
+        errors.push({ id: 'pit_speed', hand: null });
+      }
+    }
+
+    // прямая: впереди нет поворота, дорога свободна (в пит-лейне — не ругаемся)
+    if (!inCorner && u > 12 && aheadGap > 40 && !(L && L.inRange(car.s) && Math.abs(car.d) > tr.hw[i])) {
       const ahead = this.minAhead(car.s, 140);
       if (input.brake && ahead > u * 0.97 && u < vSafe * 0.95) errors.push({ id: 'brake_straight', hand: null });
       if (!input.gas && !input.brake && ahead > u + 8) errors.push({ id: 'coast_straight', hand: null });

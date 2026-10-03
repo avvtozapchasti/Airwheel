@@ -9,7 +9,7 @@ const TYPES = {
   dust: { life: 1.3, size: [1.0, 4.5], color: [0.62, 0.5, 0.36], alpha: 0.4, drag: 1.2, lift: 0.5, add: false },
   sand: { life: 1.3, size: [1.0, 4.5], color: [0.86, 0.74, 0.52], alpha: 0.4, drag: 1.2, lift: 0.5, add: false },
   gravel: { life: 1.0, size: [0.8, 3.2], color: [0.58, 0.55, 0.5], alpha: 0.45, drag: 1.0, lift: -2.0, add: false },
-  spray: { life: 0.7, size: [0.6, 3.2], color: [0.72, 0.78, 0.86], alpha: 0.28, drag: 2.2, lift: 0.2, add: false },
+  spray: { life: 0.6, size: [0.35, 2.0], color: [0.74, 0.79, 0.86], alpha: 0.13, drag: 2.6, lift: 0.1, add: false },
   spark: { life: 0.45, size: [0.18, 0.05], color: [3.2, 1.9, 0.6], alpha: 1, drag: 0.4, lift: -9.8, add: true },
 };
 
@@ -175,9 +175,9 @@ export function emitFromCar(fx, car, track, dt, { wet = false, offType = 'dust',
       fx.emit(type, x, y, z, back[0], back[1] + 0.6, back[2], 2);
     }
   }
-  // брызги на мокром асфальте
-  if (wet && v > 12) {
-    const n = dt * v * 0.9;
+  // брызги на мокром асфальте — из-под задних колёс, назад
+  if (wet && v > 16) {
+    const n = dt * v * 0.5;
     for (let k = 0; k < n; k++) {
       const [x, y, z] = wheel(2 + (k % 2));
       fx.emit('spray', x, y - 0.1, z, back[0] * 1.5, 0.8, back[2] * 1.5, 1.2);

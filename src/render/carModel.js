@@ -422,7 +422,7 @@ export function buildCarModel(spec, { color = 0xd81e2a, accent = 0x111111, numbe
         if (d < -Math.PI) d += 2 * Math.PI;
         psi = p.psi + d * alpha;
       }
-      root.position.set(x, y + (state.bounce || 0), z);
+      root.position.set(x, y + (state.bounce || 0) + (state.lift || 0) * 0.09, z);
       root.rotation.set(state.pitch || 0, psi, state.roll || 0);
       for (const w of wheels) {
         w.mesh.rotation.x = state.spin || 0;

@@ -7,8 +7,18 @@
 //  - обгон: если сзади ближе 15 м на прямой — смещаются на свободную сторону;
 //    в поворотах и узких местах едут следом;
 //  - резиновая связь ±5%: лидеры чуть медленнее, если игрок сильно отстал, и наоборот.
+//  - шины и пит-стопы: износ по составу и стилю, сцепление по влажности (профиль скорости
+//    смешивается между «сухим» и «мокрым»); решение о пит-стопе — на подходе к въезду
+//    (износ, дождь, сохнущая трасса), в пит-лейне — тот же лимит 60 км/ч и честная остановка
+//    в боксе 2.5–4 с, без «читов» по времени.
 import { accelAt, brakeAt, topSpeed, speedProfile } from './profile.js';
 import { clamp, smoothstep, rng as makeRng } from '../util/rng.js';
+import { COMPOUNDS, compoundGrip, wearGrip, suggestCompound } from './tires.js';
+import { PIT_LIMIT } from './pit.js';
+
+const WET_GRIP = 0.64; // сцепление «мокрого» профиля бота относительно сухого
+// износ за круг по составу (стиль «агрессивный» — +25%)
+const WEAR_PER_LAP = { soft: 0.24, medium: 0.13, wet: 0.15 };
 
 export const DRIVERS = [
   { name: 'Вихрь', code: 'ВИХ', color: '#2f7cf6' },
@@ -66,6 +76,11 @@ export class Bot {
     this.prev = { x: 0, y: 0, z: 0, psi: 0 };
     this.hitCd = 0;
     this.lastBrakeZone = -1;
+    // шины и пит-стоп
+    this.tire = { compound: 'medium', wear: 0, grip: 1 };
+    this.pit = { phase: 'track', plan: null, t: 0, decided: -1, box: 0, tIn: 0 };
+    this.pitStops = [];
+    this.inBox = false;
   }
 
   place(s, d) {
@@ -120,6 +135,8 @@ export function createBots(count, spec, track, opts = {}) {
     // а на прямой — та же машина, что у игрока
     const own = speedProfile(track, track.racingLine, spec, { gripK: pace * pace });
     const b = new Bot(def, spec, track, own, { skill, style, seed: seed + k * 97 });
+    // «мокрый» профиль: тот же темп при сцеплении шин ×0.64 (сухие на мокром)
+    b.profWet = speedProfile(track, track.racingLine, spec, { gripK: pace * pace * WET_GRIP });
     b.pace = pace;
     b.bps = opts.bps || [];
     return b;
@@ -127,8 +144,31 @@ export function createBots(count, spec, track, opts = {}) {
 }
 
 // Квалификационное время бота: его идеальный круг, ±1.5% разброса по мастерству.
-export function qualiTime(bot, r = Math.random) {
-  return bot.prof.lapTime * (1 + (r() * 2 - 1) * 0.015);
+// wetness — средняя влажность сессии: в дождь круг медленнее (на подходящих шинах).
+export function qualiTime(bot, r = Math.random, wetness = 0) {
+  const g = compoundGrip(wetness > 0.33 ? 'wet' : 'medium', wetness);
+  const f = clamp((1 - g) / (1 - WET_GRIP), -0.1, 1.2);
+  const lap = bot.prof.lapTime + ((bot.profWet?.lapTime ?? bot.prof.lapTime) - bot.prof.lapTime) * f;
+  return lap * (1 + (r() * 2 - 1) * 0.015);
+}
+
+// Стартовые шины ботов по погоде.
+export function botStartTires(bots, weatherMode, laps) {
+  for (const b of bots) {
+    const compound = weatherMode === 'rain' ? 'wet' : laps <= 3 && b.style === 'aggressive' ? 'soft' : 'medium';
+    b.tire = { compound, wear: 0, grip: 1 };
+    b.pit = { phase: 'track', plan: null, t: 0, decided: -1, box: b.pit.box, tIn: 0 };
+    b.pitStops = [];
+    b.inBox = false;
+  }
+}
+
+// Скорость бота по профилю с учётом шин: смесь сухого и мокрого профиля по сцеплению.
+function profileSpeed(b, i) {
+  const g = b.tire.grip;
+  const f = clamp((1 - g) / (1 - WET_GRIP), -0.1, 1.2);
+  const dry = b.prof.v[i];
+  return b.profWet ? dry + (b.profWet.v[i] - dry) * f : dry * Math.sqrt(g);
 }
 
 // Все машины на трассе в едином виде для логики соседей.
@@ -138,18 +178,120 @@ function carsView(bots, player) {
   return list;
 }
 
-// Шаг всех ботов. ctx: { player (машина игрока), raceTime, started, dt }
+// Шины бота: износ по пройденному пути, сцепление по влажности.
+function wearBot(b, ds, wetness) {
+  const T = b.tire;
+  const C = COMPOUNDS[T.compound];
+  const L = b.track.length;
+  const abuse = C.rain ? 1 + 1.6 * (1 - wetness) : 1 + 0.3 * wetness;
+  T.wear = Math.min(1, T.wear + ((WEAR_PER_LAP[T.compound] * (b.style === 'aggressive' ? 1.25 : 1) * abuse) * ds) / L);
+  T.grip = compoundGrip(T.compound, wetness) * wearGrip(T.compound, T.wear);
+}
+
+// Стратегия: решение о пит-стопе — один раз за круг, за 600 м до въезда в пит-лейн.
+function decidePit(b, ctx) {
+  const lane = b.track.pit;
+  if (!lane || b.pit.phase !== 'track' || b.finishedCoast) return;
+  const u = lane.rel(b.s);
+  const lap = Math.floor(b.progress / b.track.length);
+  if (u < b.track.length - 600 || b.pit.decided === lap) return;
+  b.pit.decided = lap;
+  const lapsLeft = (ctx.laps ?? 3) - lap - 1;
+  if (lapsLeft < 1) return;
+  const w = ctx.wetness ?? 0;
+  const rainSoon = ctx.forecast?.type === 'rain' && ctx.forecast.in < (ctx.lapTime ?? 90) * 0.6;
+  const wantWet = w > 0.36 || (rainSoon && w > 0.1);
+  const onWet = COMPOUNDS[b.tire.compound].rain;
+  let plan = null;
+  if (wantWet && !onWet) plan = 'wet';
+  else if (!wantWet && onWet && w < 0.22 && lapsLeft >= 1) plan = suggestCompound(w, lapsLeft);
+  else if (b.tire.wear > 0.7 && lapsLeft >= 1) plan = onWet ? 'wet' : suggestCompound(w, lapsLeft);
+  b.pit.plan = plan;
+}
+
+// Бот в пит-лейне: ведём по пути пит-лейна, лимит 60 км/ч, остановка в боксе, смена шин.
+function stepBotPit(b, dt, ctx) {
+  const lane = b.track.pit;
+  const P = b.pit;
+  const u = lane.rel(b.s);
+  const acc = accelAt(b.spec, b.v), dec = brakeAt(b.spec, b.v) * 0.8;
+  const bRel = lane.boxRel(P.box);
+  let vT = profileSpeed(b, b.idx);
+  if (lane.inLimitZone(b.s) || (u > lane.limA - 140 && u < lane.limA)) {
+    // к линии въезда — уже на 60 км/ч
+    const toLine = Math.max(0, lane.limA - u);
+    vT = Math.min(vT, u >= lane.limA ? PIT_LIMIT : Math.sqrt(PIT_LIMIT * PIT_LIMIT + 2 * dec * 0.8 * toLine));
+  }
+  if (P.phase === 'lane') {
+    const toBox = bRel - u;
+    if (toBox > -0.5) vT = Math.min(vT, Math.sqrt(2 * 4 * Math.max(0, toBox - 0.3)));
+    if (toBox < 0.6 && b.v < 0.8) {
+      P.phase = 'service';
+      P.t = 0;
+      P.time = 2.6 + b.rng() * 0.9 + (COMPOUNDS[P.plan].rain !== COMPOUNDS[b.tire.compound].rain ? 0.4 : 0);
+      b.v = 0;
+      b.inBox = true;
+    }
+  }
+  if (P.phase === 'service') {
+    P.t += dt;
+    b.v = 0;
+    b.brake = 1;
+    b.d = lane.side * lane.workD(b.s);
+    b.pose(0);
+    if (P.t >= P.time) {
+      b.tire = { compound: P.plan, wear: 0, grip: compoundGrip(P.plan, ctx.wetness ?? 0) };
+      P.phase = 'exit';
+      b.inBox = false;
+    }
+    return;
+  }
+  let nv = b.v < vT ? Math.min(vT, b.v + acc * dt) : Math.max(vT, b.v - dec * dt);
+  nv = Math.max(0, nv);
+  const ax = (nv - b.v) / dt;
+  b.brake = ax < -2 ? 1 : 0;
+  // поперечное положение — прямо по пути (кинематика, без пружины): в стенку не врезаемся
+  const target = P.phase === 'lane' || P.phase === 'exit' ? lane.boxPathD(b.s, P.box) : lane.pathD(b.s);
+  b.dVel = ((target - b.d) * Math.min(1, dt * 6)) / dt; // moveBot сдвинет d на dVel·dt
+  moveBot(b, nv, ax, dt);
+  if (u > lane.len - 2 || !lane.inRange(b.s)) {
+    // выехал на трассу
+    if (P.phase === 'exit') b.pitStops.push({ lap: Math.floor(b.progress / b.track.length), compound: b.tire.compound, time: ctx.raceTime - P.tIn, loss: Math.max(0, ctx.raceTime - P.tIn - (ctx.pitRef ?? 20)) });
+    P.phase = 'track';
+    P.plan = null;
+  }
+}
+
+// Шаг всех ботов. ctx: { player (машина игрока), raceTime, started, dt, wetness, laps, forecast, lapTime, pitRef }
 export function updateBots(bots, ctx) {
   const { dt, player } = ctx;
   if (!bots.length) return;
   const tr = bots[0].track;
   const view = carsView(bots, player);
+  const w = ctx.wetness ?? 0;
   for (const b of bots) {
     b.savePrev();
+    const p0 = b.progress;
     if (b.finishedCoast) {
       // после финиша — спокойно катится
       moveBot(b, Math.max(0, b.v - 4 * dt), 0, dt);
       continue;
+    }
+    // пит-лейн: решение, въезд, остановка
+    if (ctx.started && tr.pit) {
+      decidePit(b, ctx);
+      if (b.pit.phase === 'track' && b.pit.plan && tr.pit.rel(b.s) < 30 && tr.pit.inRange(b.s)) {
+        b.pit.phase = 'lane';
+        b.pit.tIn = ctx.raceTime;
+        b.pass = 0;
+        b.passT = 0;
+        b.mistake = null;
+      }
+      if (b.pit.phase !== 'track') {
+        stepBotPit(b, dt, ctx);
+        wearBot(b, b.progress - p0, w);
+        continue;
+      }
     }
     if (!ctx.started) {
       b.pose(0);
@@ -170,7 +312,16 @@ export function updateBots(bots, ctx) {
       const gap = b.progress - player.progress;
       rubber = 1 - 0.05 * smoothstep(150, 600, gap) + 0.05 * smoothstep(150, 600, -gap);
     }
-    let vT = b.prof.v[tr.index(b.s + b.v * 0.1)] * rubber;
+    let vT = profileSpeed(b, tr.index(b.s + b.v * 0.1)) * rubber;
+    // едет на пит-стоп: заранее тормозит к линии 60 км/ч и смещается к въезду
+    let pitShift = 0;
+    if (b.pit.plan && tr.pit) {
+      const lane = tr.pit;
+      const u = lane.rel(b.s);
+      const toLine = (u > lane.len ? tr.length - u : -u) + lane.limA;
+      vT = Math.min(vT, Math.sqrt(PIT_LIMIT * PIT_LIMIT + 2 * brakeAt(b.spec, b.v) * 0.6 * Math.max(0, toLine)));
+      if (u > lane.len) pitShift = smoothstep(tr.length - 450, tr.length - 120, u);
+    }
 
     // --- ошибки: поздний тормоз → вынос наружу ---
     const zoneAhead = nearestZone(b, tr);
@@ -230,6 +381,7 @@ export function updateBots(bots, ctx) {
 
     // --- боковое движение: пружина к цели ---
     let target = line.offset[i] + b.pass;
+    if (pitShift > 0) target += (tr.pit.side * (hw - 2.2) - target) * pitShift;
     if (b.mistake) target += b.mistake.out * (hw - Math.abs(line.offset[i])) * (b.mistake.t > 2 ? 0.2 : 1.0);
     target = clamp(target, -(hw + (b.mistake ? 1.2 : -0.9)), hw + (b.mistake ? 1.2 : -0.9));
     // не наезжать сбоку на машину рядом
@@ -245,6 +397,7 @@ export function updateBots(bots, ctx) {
     b.dVel = clamp(b.dVel, -maxLat, maxLat);
     moveBot(b, nv, ax, dt);
     if (b.hitCd > 0) b.hitCd -= dt;
+    wearBot(b, b.progress - p0, w);
   }
 }
 

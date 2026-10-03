@@ -303,6 +303,7 @@ export function buildCarModel(spec, { color = 0xd81e2a, livery = null, number = 
         }
       }
       const braking = state.brakeLight ?? state.brake > 0.2;
+      model.braking = braking;
       tail.emissiveIntensity = braking ? 5.5 : env.night ? 1.3 : 0.55;
       blink += dt;
       rain.emissiveIntensity = env.wet ? (Math.sin(blink * 13) > 0 ? 6 : 0.3) : 0;

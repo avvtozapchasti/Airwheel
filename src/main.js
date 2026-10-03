@@ -1175,6 +1175,7 @@ function tick(now, dt) {
       focus: car && showCars ? car : { s: game.track.project(gfx.camera.position.x, gfx.camera.position.z, -1).s },
       bots: app.state === 'race' || (app.state === 'paused' && app.pausedFrom === 'race') ? othersOf(S) : null,
       pit: pitView(S),
+      cars: showCars ? carLights() : null,
     });
     gfx.setSpeedBlur(car && showCars ? Math.max(0, (speedOf(car) / game.spec.vmax - 0.55) * 1.6) : 0, car && showCars ? game.model.root.position : null);
     // глубина резкости — только в меню и на облёте решётки, не во время езды
@@ -1291,9 +1292,18 @@ function updateHud(S, car, input, dt) {
       cars: [{ x: car.x, z: car.z, color: PLAYER.color, player: true }],
     });
     hudExtras(S, car);
+    if ((app.towerT = (app.towerT ?? 0) - dt) <= 0) {
+      app.towerT = 1;
+      world.setStandings(rows.map((r) => ({ code: r.code, color: r.color, player: !!r.player })));
+    }
     return;
   }
   hudExtras(S, car);
+  // табло-пилон у старта — раз в секунду
+  if ((app.towerT = (app.towerT ?? 0) - dt) <= 0) {
+    app.towerT = 1;
+    world.setStandings(S.tower());
+  }
   hud.update({
     ...common,
     lapTime: S.lapTimeOf(p),
@@ -1312,6 +1322,17 @@ function updateHud(S, car, input, dt) {
 function carEnv() {
   const t = game.track?.def.env?.time;
   return { night: t === 'night' || t === 'dusk', wet: WET.uWet.value > 0.35 && (game.session?.rain ?? 0) + (game.session?.wetness ?? 0) > 0.3 };
+}
+
+// Машины на экране — для бликов фар/стоп-сигналов и их отражений на асфальте.
+function carLights() {
+  const out = [];
+  for (const m of [game.model, ...game.botModels]) {
+    if (!m?.root.parent || !m.root.visible) continue;
+    const p = m.root.position;
+    out.push({ x: p.x, y: p.y, z: p.z, psi: m.root.rotation.y, brake: !!m.braking, f1: m.spec.id === 'f1', dims: m.spec.dims, player: m === game.model });
+  }
+  return out;
 }
 
 // Машины соперников (боты и игроки по сети) — для звука, брызг и пятен фар.

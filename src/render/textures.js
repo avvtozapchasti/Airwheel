@@ -358,35 +358,6 @@ export function board(text, { bg = '#ffffff', fg = '#111111', w = 256, h = 128, 
   });
 }
 
-// Фасад с окнами: цвет + emissive (светящиеся окна ночью).
-export function windows({ lit = 0.45, seed = 71, tint = '#ffd9a0' } = {}) {
-  return cached(`windows-${lit}-${seed}-${tint}`, () => {
-    const W = 256, H = 512, cols = 8, rows = 16;
-    const c = canvas(W, H), e = canvas(W, H);
-    const ctx = c.getContext('2d'), ex = e.getContext('2d');
-    ctx.fillStyle = '#8d9097';
-    ctx.fillRect(0, 0, W, H);
-    ex.fillStyle = '#000';
-    ex.fillRect(0, 0, W, H);
-    const r = rng(seed);
-    const cw = W / cols, ch = H / rows;
-    for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
-        const on = r() < lit;
-        ctx.fillStyle = on ? '#e8d7b0' : r() < 0.5 ? '#2b3440' : '#394452';
-        ctx.fillRect(x * cw + 4, y * ch + 5, cw - 8, ch - 10);
-        if (on) {
-          ex.fillStyle = r() < 0.15 ? '#9fd4ff' : tint;
-          ex.globalAlpha = 0.5 + r() * 0.5;
-          ex.fillRect(x * cw + 4, y * ch + 5, cw - 8, ch - 10);
-          ex.globalAlpha = 1;
-        }
-      }
-    }
-    return { map: toTexture(c), emissiveMap: toTexture(e) };
-  });
-}
-
 // Ограждение armco: оцинкованный металл с двумя волнами профиля (u — по высоте).
 export function armco() {
   return cached('armco', () => {
@@ -505,6 +476,324 @@ export function tyres() {
       ctx.fillRect(48, y, 16, 32);
     }
     return toTexture(c);
+  });
+}
+
+// --- город ---
+// Фасады: массив текстур (4 стиля, без «протекания» мип-уровней между стилями).
+// Слой: 8 окон × 16 этажей (одна ячейка ≈ 2.75 × 3 м). Цвет: RGB + альфа = маска стекла
+// (стекло глянцевое). Свечение: цвет каждого окна, «горит ли окно» решает шейдер.
+//   0 — жилой дом (тёплый свет, балконы), 1 — офис (сетка, холодный свет),
+//   2 — ленточное остекление, 3 — стеклянный фасад (тёмно-синее стекло, импосты)
+export const FACADE_STYLES = 4;
+export function facadeLayers() {
+  return cached('facades', () => {
+    const W = 256, H = 512, cols = 8, rows = 16, cw = W / cols, ch = H / rows;
+    const color = new Uint8Array(W * H * 4 * FACADE_STYLES), emis = new Uint8Array(W * H * 4 * FACADE_STYLES);
+    const styles = [
+      { wall: '#a49c90', glass: ['#26303b', '#2f3a46', '#1f2731'], lit: ['#ffd49a', '#ffc27a', '#ffe2b8', '#ffb98a'], win: [20, 19, 6] },
+      { wall: '#7d8592', glass: ['#1f2a36', '#25313f'], lit: ['#e4f1ff', '#cfe6ff', '#f4f8ff'], win: [27, 22, 5] },
+      { wall: '#c9c6bf', glass: ['#223040', '#1b2633'], lit: ['#f2f6ff', '#ffe0b0', '#d6ecff'], ribbon: true },
+      { wall: '#1b2735', glass: ['#203246', '#1a2a3c', '#26394f'], lit: ['#bfe0ff', '#e8f4ff', '#9fd0ff'], curtain: true },
+    ];
+    styles.forEach((st, layer) => {
+      const r = rng(311 + layer * 37);
+      const c = canvas(W, H), e = canvas(W, H), m = canvas(W, H);
+      const cx = c.getContext('2d'), ex = e.getContext('2d'), mx = m.getContext('2d');
+      cx.fillStyle = st.wall;
+      cx.fillRect(0, 0, W, H);
+      ex.fillStyle = '#000';
+      ex.fillRect(0, 0, W, H);
+      mx.fillStyle = '#000';
+      mx.fillRect(0, 0, W, H);
+      // фактура стены: пятна и межэтажные пояса
+      for (let k = 0; k < 1400; k++) {
+        cx.fillStyle = `rgba(0,0,0,${r() * 0.07})`;
+        cx.fillRect(r() * W, r() * H, 2 + r() * 4, 2 + r() * 4);
+      }
+      const pick = (arr) => arr[Math.floor(r() * arr.length)];
+      const win = (x, y, w, h) => {
+        cx.fillStyle = pick(st.glass);
+        cx.fillRect(x, y, w, h);
+        // блик на стекле (верхняя часть светлее)
+        cx.fillStyle = 'rgba(255,255,255,0.06)';
+        cx.fillRect(x, y, w, h * 0.35);
+        mx.fillStyle = '#fff';
+        mx.fillRect(x, y, w, h);
+        const col = pick(st.lit);
+        ex.fillStyle = col;
+        ex.globalAlpha = 0.55 + r() * 0.45;
+        ex.fillRect(x, y, w, h);
+        // шторы/жалюзи — часть окна темнее
+        if (r() < 0.35) {
+          ex.globalAlpha = 0.5;
+          ex.fillStyle = '#000';
+          ex.fillRect(x, y, w, h * (0.2 + r() * 0.5));
+        }
+        ex.globalAlpha = 1;
+      };
+      if (st.ribbon || st.curtain) {
+        for (let y = 0; y < rows; y++) {
+          const y0 = y * ch + (st.curtain ? 2 : 7), hh = st.curtain ? ch - 4 : ch - 13;
+          // сплошная лента стекла с импостами
+          for (let x = 0; x < cols * 2; x++) win(x * (cw / 2) + 1, y0, cw / 2 - 2, hh);
+          cx.fillStyle = st.curtain ? '#3a4d63' : '#9da3aa';
+          cx.fillRect(0, y * ch, W, st.curtain ? 2 : 6);
+        }
+      } else {
+        const [ww, wh, myp] = st.win;
+        for (let y = 0; y < rows; y++) {
+          // межэтажный пояс
+          cx.fillStyle = 'rgba(0,0,0,0.12)';
+          cx.fillRect(0, y * ch + ch - 3, W, 3);
+          for (let x = 0; x < cols; x++) {
+            const x0 = x * cw + (cw - ww) / 2, y0 = y * ch + myp;
+            win(x0, y0, ww, wh);
+            // откосы
+            cx.fillStyle = 'rgba(0,0,0,0.25)';
+            cx.fillRect(x0 - 1, y0 - 1, ww + 2, 2);
+            if (layer === 0 && r() < 0.18) {
+              // балкон
+              cx.fillStyle = '#6f6a62';
+              cx.fillRect(x0 - 3, y0 + wh, ww + 6, 4);
+            }
+          }
+        }
+      }
+      const ci = cx.getImageData(0, 0, W, H).data, ei = ex.getImageData(0, 0, W, H).data, mi = mx.getImageData(0, 0, W, H).data;
+      const off = layer * W * H * 4;
+      for (let k = 0; k < W * H; k++) {
+        color[off + k * 4] = ci[k * 4];
+        color[off + k * 4 + 1] = ci[k * 4 + 1];
+        color[off + k * 4 + 2] = ci[k * 4 + 2];
+        color[off + k * 4 + 3] = mi[k * 4];
+        emis[off + k * 4] = ei[k * 4];
+        emis[off + k * 4 + 1] = ei[k * 4 + 1];
+        emis[off + k * 4 + 2] = ei[k * 4 + 2];
+        emis[off + k * 4 + 3] = 255;
+      }
+    });
+    const mk = (data) => {
+      const t = new THREE.DataArrayTexture(data, W, H, FACADE_STYLES);
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.generateMipmaps = true;
+      t.minFilter = THREE.LinearMipmapLinearFilter;
+      t.magFilter = THREE.LinearFilter;
+      t.anisotropy = 4;
+      t.flipY = false;
+      t.needsUpdate = true;
+      return t;
+    };
+    return { map: mk(color), emissive: mk(emis) };
+  });
+}
+
+// Вымышленные бренды для рекламы (щиты у трассы, LED-экраны, вывески на крышах).
+// Атлас 4×4 плитки 512×256: 8 брендов × 2 варианта (логотип / слоган).
+export const BRANDS = [
+  { name: 'AIRWHEEL', slogan: 'Рули руками', bg: ['#0b0f1a', '#1b2233'], fg: '#ffcc33', mark: 'wheel' },
+  { name: 'FISTBUMP', sub: 'COLA', slogan: 'Газ — кулаком!', bg: ['#c8102e', '#7a0a1c'], fg: '#ffffff', mark: 'fizz' },
+  { name: 'TACHYON', sub: 'TYRES', slogan: 'Сцепление на пределе', bg: ['#111111', '#2a2a2a'], fg: '#ffd400', mark: 'chevron' },
+  { name: 'PALMA', sub: 'FUEL', slogan: 'Ладонь — тормоз, бак — полный', bg: ['#0f7a3d', '#064d26'], fg: '#e9ffe9', mark: 'drop' },
+  { name: 'NEONIX', slogan: 'Светим ярче', bg: ['#3a0ca3', '#7209b7'], fg: '#4cf2ff', mark: 'bolt' },
+  { name: 'GESTURA', sub: 'MOBILE', slogan: 'Связь без кнопок', bg: ['#0a58ca', '#06357a'], fg: '#ffffff', mark: 'wave' },
+  { name: 'KITSUNE', sub: 'RAMEN', slogan: 'Горячо, как шины', bg: ['#ff7a00', '#c2410c'], fg: '#fff7ed', mark: 'bowl' },
+  { name: 'CHRONOLAP', slogan: 'Каждая тысячная', bg: ['#0b1d3a', '#13294b'], fg: '#e8eef8', mark: 'clock' },
+];
+function drawMark(ctx, kind, x, y, s, fg) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.strokeStyle = fg;
+  ctx.fillStyle = fg;
+  ctx.lineWidth = s * 0.12;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  if (kind === 'wheel') {
+    ctx.arc(0, 0, s * 0.42, 0, Math.PI * 2);
+    ctx.moveTo(-s * 0.42, 0);
+    ctx.lineTo(s * 0.42, 0);
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, s * 0.42);
+    ctx.stroke();
+  } else if (kind === 'fizz') {
+    for (const [bx, by, br] of [[0, 0.1, 0.3], [0.25, -0.25, 0.14], [-0.22, -0.3, 0.1]]) {
+      ctx.moveTo(bx * s + br * s, by * s);
+      ctx.arc(bx * s, by * s, br * s, 0, Math.PI * 2);
+    }
+    ctx.stroke();
+  } else if (kind === 'chevron') {
+    for (const o of [-0.25, 0.1]) {
+      ctx.moveTo(o * s - 0.15 * s, -0.4 * s);
+      ctx.lineTo(o * s + 0.2 * s, 0);
+      ctx.lineTo(o * s - 0.15 * s, 0.4 * s);
+    }
+    ctx.stroke();
+  } else if (kind === 'drop') {
+    ctx.moveTo(0, -0.45 * s);
+    ctx.quadraticCurveTo(0.4 * s, 0.05 * s, 0, 0.42 * s);
+    ctx.quadraticCurveTo(-0.4 * s, 0.05 * s, 0, -0.45 * s);
+    ctx.fill();
+  } else if (kind === 'bolt') {
+    ctx.moveTo(0.1 * s, -0.48 * s);
+    ctx.lineTo(-0.22 * s, 0.05 * s);
+    ctx.lineTo(0.02 * s, 0.05 * s);
+    ctx.lineTo(-0.1 * s, 0.48 * s);
+    ctx.lineTo(0.24 * s, -0.08 * s);
+    ctx.lineTo(0, -0.08 * s);
+    ctx.closePath();
+    ctx.fill();
+  } else if (kind === 'wave') {
+    for (const rr of [0.15, 0.3, 0.45]) {
+      ctx.moveTo(Math.cos(-0.8) * rr * s - 0.2 * s, Math.sin(-0.8) * rr * s + 0.2 * s);
+      ctx.arc(-0.2 * s, 0.2 * s, rr * s, -0.8 - 0.0, -0.8 + 0.9 + 0.0);
+    }
+    ctx.stroke();
+  } else if (kind === 'bowl') {
+    ctx.arc(0, 0, s * 0.38, 0, Math.PI);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    for (const o of [-0.15, 0, 0.15]) {
+      ctx.moveTo(o * s, -0.08 * s);
+      ctx.quadraticCurveTo(o * s + 0.1 * s, -0.25 * s, o * s, -0.42 * s);
+    }
+    ctx.stroke();
+  } else if (kind === 'clock') {
+    ctx.arc(0, 0, s * 0.4, 0, Math.PI * 2);
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, -s * 0.28);
+    ctx.moveTo(0, 0);
+    ctx.lineTo(s * 0.2, 0);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+export function brandAtlas() {
+  return cached('brands', () => {
+    const TW = 512, TH = 256, c = canvas(TW * 4, TH * 4), ctx = c.getContext('2d');
+    BRANDS.forEach((b, k) => {
+      for (let v = 0; v < 2; v++) {
+        const t = k * 2 + v, x0 = (t % 4) * TW, y0 = Math.floor(t / 4) * TH;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x0, y0, TW, TH);
+        ctx.clip();
+        const g = ctx.createLinearGradient(x0, y0, x0 + TW, y0 + TH);
+        g.addColorStop(0, v ? b.bg[1] : b.bg[0]);
+        g.addColorStop(1, v ? b.bg[0] : b.bg[1]);
+        ctx.fillStyle = g;
+        ctx.fillRect(x0, y0, TW, TH);
+        // диагональные полосы-акценты
+        ctx.globalAlpha = 0.12;
+        ctx.fillStyle = b.fg;
+        for (let s = -TH; s < TW; s += 70) {
+          ctx.beginPath();
+          ctx.moveTo(x0 + s, y0 + TH);
+          ctx.lineTo(x0 + s + 26, y0 + TH);
+          ctx.lineTo(x0 + s + 26 + TH, y0);
+          ctx.lineTo(x0 + s + TH, y0);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = b.fg;
+        ctx.textBaseline = 'middle';
+        if (v === 0) {
+          drawMark(ctx, b.mark, x0 + 92, y0 + TH / 2, 120, b.fg);
+          ctx.textAlign = 'left';
+          const fs = b.name.length > 8 ? 70 : 84;
+          ctx.font = `900 ${fs}px system-ui, sans-serif`;
+          ctx.fillText(b.name, x0 + 170, y0 + TH / 2 - (b.sub ? 22 : 0), TW - 190);
+          if (b.sub) {
+            ctx.font = '700 40px system-ui, sans-serif';
+            ctx.globalAlpha = 0.85;
+            ctx.fillText(b.sub, x0 + 172, y0 + TH / 2 + 48);
+            ctx.globalAlpha = 1;
+          }
+        } else {
+          ctx.textAlign = 'center';
+          ctx.font = '900 58px system-ui, sans-serif';
+          ctx.fillText(b.name, x0 + TW / 2, y0 + 78, TW - 40);
+          ctx.font = '600 34px system-ui, sans-serif';
+          ctx.fillText(b.slogan, x0 + TW / 2, y0 + 170, TW - 40);
+        }
+        // рамка
+        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+        ctx.lineWidth = 6;
+        ctx.strokeRect(x0 + 3, y0 + 3, TW - 6, TH - 6);
+        ctx.restore();
+      }
+    });
+    const t = toTexture(c, { repeat: false });
+    t.anisotropy = 8;
+    return t;
+  });
+}
+
+// Неоновые вывески-«лезвия» (вертикальные, перпендикулярно фасаду): 8 штук 128×512 в ряд.
+export const NEON_SIGNS = [
+  ['ОТЕЛЬ', '#ff2d95'],
+  ['БАР', '#21e6ff'],
+  ['КАФЕ', '#ffb020'],
+  ['24/7', '#39ff88'],
+  ['РАМЕН', '#ff4d4d'],
+  ['КЛУБ', '#b14dff'],
+  ['ТАКСИ', '#fff04d'],
+  ['КИНО', '#4da3ff'],
+];
+export function neonAtlas() {
+  return cached('neon', () => {
+    const TW = 128, TH = 512, c = canvas(TW * NEON_SIGNS.length, TH), ctx = c.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, c.width, TH);
+    NEON_SIGNS.forEach(([text, col], k) => {
+      const x0 = k * TW;
+      ctx.fillStyle = '#07080c';
+      ctx.fillRect(x0 + 6, 6, TW - 12, TH - 12);
+      ctx.strokeStyle = col;
+      ctx.shadowColor = col;
+      ctx.shadowBlur = 14;
+      ctx.lineWidth = 5;
+      ctx.strokeRect(x0 + 14, 14, TW - 28, TH - 28);
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowBlur = 18;
+      const chars = [...text];
+      const fs = Math.min(84, (TH - 70) / chars.length);
+      ctx.font = `800 ${fs}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      chars.forEach((ch, j) => {
+        const y = 35 + (j + 0.5) * ((TH - 70) / chars.length);
+        ctx.fillStyle = col;
+        ctx.fillText(ch, x0 + TW / 2, y);
+        ctx.fillStyle = 'rgba(255,255,255,0.75)';
+        ctx.shadowBlur = 0;
+        ctx.fillText(ch, x0 + TW / 2, y);
+        ctx.shadowBlur = 18;
+      });
+      ctx.shadowBlur = 0;
+    });
+    return toTexture(c, { repeat: false });
+  });
+}
+
+// Вертолётная площадка: круг с «H».
+export function helipad() {
+  return cached('helipad', () => {
+    const S = 256, c = canvas(S), ctx = c.getContext('2d');
+    ctx.fillStyle = '#3b3f45';
+    ctx.fillRect(0, 0, S, S);
+    ctx.strokeStyle = '#f2c230';
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.arc(S / 2, S / 2, S * 0.4, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#f4f4f4';
+    ctx.font = '900 140px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('H', S / 2, S / 2 + 8);
+    return toTexture(c, { repeat: false });
   });
 }
 
